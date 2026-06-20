@@ -11,7 +11,7 @@ import math
 import cv2
 
 from config import (
-    get_model, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS,
+    get_model, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS, _DROP_EDGE_PX,
     _KP_CONF, _CROWN_FACTOR, _FINGER_FACTOR, _TORSO_FACTOR,
     _SIDE_MARGIN, _MARGIN_PX, _PAD, _IMG_EXTS,
 )
@@ -84,6 +84,13 @@ def detect(image):
                 dup = True; break
         if not dup:
             keep_b.append(b); keep_k.append(kb)
+
+    # Bỏ người bị CẮT ở rìa TRÁI khung hình (giám sát/qua đường, nửa người ngoài khung).
+    # CHỈ bên trái -> giữ nguyên sinh viên ngồi sát mép phải.
+    if _DROP_EDGE_PX > 0:
+        keep = [(b, kb) for b, kb in zip(keep_b, keep_k) if b[0] > _DROP_EDGE_PX]
+        keep_b = [b for b, _ in keep]
+        keep_k = [kb for _, kb in keep]
     return keep_b, keep_k
 
 def _head_point(kpts, box):

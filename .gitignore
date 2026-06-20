@@ -41,6 +41,7 @@ build/
 
 # Rule images
 rule*.png
+rule*.jpg
 
 # Logs
 *.log

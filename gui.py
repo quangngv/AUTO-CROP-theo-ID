@@ -14,6 +14,7 @@ from detection import (
     list_frames, IoUTracker, _iou,
 )
 from config import _DEFAULT_DIR
+import gallery
 
 def _start_dir(current):
     """Thư mục mở đầu cho hộp thoại: đường dẫn đang nhập -> mặc định -> rỗng."""
@@ -255,6 +256,9 @@ class MainWindow(QMainWindow):
         path_row.addWidget(btn_browse)
         btn_batch = QPushButton("📁 Chọn nhiều folder..."); btn_batch.clicked.connect(self.browse_batch)
         path_row.addWidget(btn_batch)
+        btn_gal = QPushButton("🧠 Bộ nhớ id"); btn_gal.setStyleSheet("background:#6a3aa5;")
+        btn_gal.setToolTip("Tạo bộ nhớ id từ ảnh quy tắc để TỰ GỢI Ý id"); btn_gal.clicked.connect(self.build_gallery)
+        path_row.addWidget(btn_gal)
         self.btn_load = QPushButton("🔍 Tải & phát hiện"); self.btn_load.clicked.connect(self.load_and_detect)
         path_row.addWidget(self.btn_load)
         root.addLayout(path_row)
@@ -339,6 +343,9 @@ class MainWindow(QMainWindow):
         self.btn_batch.setStyleSheet("background:#8a5a00;")
         self.btn_batch.clicked.connect(self.batch_all); self.btn_batch.setEnabled(False)
         rl.addWidget(self.btn_batch)
+        self.btn_savegal = QPushButton("💾 Lưu bộ nhớ id"); self.btn_savegal.setStyleSheet("background:#6a3aa5;")
+        self.btn_savegal.clicked.connect(self.save_gallery_now); self.btn_savegal.setEnabled(False)
+        rl.addWidget(self.btn_savegal)
         right.setLayout(rl)
         main.addWidget(right)
 
@@ -370,6 +377,8 @@ class MainWindow(QMainWindow):
         self._current_folder = None
         self._frame_pos = "first"   # đang xem frame đầu/giữa/cuối
         self._saved_edits = {}      # {folder: {ids, boxes, done}} -> lưu ra đĩa
+        self._gallery = gallery.load_gallery()   # bộ nhớ id theo ngoại hình
+        self._gallery_img = None
 
         # Khôi phục cài đặt cửa sổ (kích thước / phóng to / vạch chia) từ lần trước
         self._settings = QSettings("AutoCropID", "AutoCropID")
@@ -644,34 +653,12 @@ class MainWindow(QMainWindow):
                 if len(di) == len(self.first_boxes):
                     saved_ids = list(di)
 
-        self._frame_pos = "first"
-        for key, btn in self.pos_buttons.items():
-            btn.setChecked(key == "first")
+        # Gợi ý id tự động theo NGOẠI HÌNH (nếu đã có bộ nhớ id và folder chưa gán)
+        suggest_colors = None
+        if self._gallery and not any(s.strip() for s in saved_ids):
+            saved_ids, suggest_colors = self._suggest_ids(first, saved_boxes)
 
-        labels = [str(i + 1) for i in range(len(self.first_boxes))]
-        self.view.set_frame(first)
-        self.view.set_boxes(saved_boxes, labels)
-        self.view.on_select = self._highlight_row
-
-        # Dựng form gán id (mỗi khung có nút số để CHỌN khung trên ảnh)
-        self._clear_form()
-        for i in range(len(self.first_boxes)):
-            row = QHBoxLayout()
-            btn = QPushButton(f"Khung #{i + 1}"); btn.setCheckable(True); btn.setFixedWidth(95)
-            btn.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
-                              "QPushButton:checked{background:#c8a000;color:#000;}")
-            btn.clicked.connect(lambda _=False, k=i: self._select_box(k))
-            self.id_buttons.append(btn); row.addWidget(btn)
-            row.addWidget(QLabel("→ id_"))
-            edit = QComboBox(); edit.setEditable(True); edit.setFixedWidth(80)
-            edit.addItem("")                                   # trống = bỏ qua
-            edit.addItems([str(n) for n in range(1, 22)])      # 1..21 chọn sẵn
-            edit.lineEdit().setPlaceholderText("bỏ")
-            edit.setCurrentText(saved_ids[i] if i < len(saved_ids) else "")
-            self.id_inputs.append(edit); row.addWidget(edit); row.addStretch()
-            w = QWidget(); w.setLayout(row); self.form.addWidget(w)
-        if self.id_buttons:
-            self._highlight_row(0)        # khung 0 đang chọn mặc định
+        self._populate_ui(first, saved_boxes, saved_ids, suggest_colors)
 
         # Cập nhật cache cho folder hiện tại (giữ detection để lần sau không chạy lại YOLO)
         self._save_current_state()
@@ -688,11 +675,123 @@ class MainWindow(QMainWindow):
             f"{prefix}{len(self.frames)} frame — phát hiện {len(self.first_boxes)} người ở frame đầu. "
             f"Gán id rồi nhấn nút xanh.")
 
+    def _populate_ui(self, first_img, saved_boxes, saved_ids, suggest_colors=None):
+        """Dựng khung + form gán id (dùng chung cho mở folder và tạo bộ nhớ id)."""
+        self._frame_pos = "first"
+        for key, btn in self.pos_buttons.items():
+            btn.setChecked(key == "first")
+        labels = [str(i + 1) for i in range(len(self.first_boxes))]
+        self.view.set_frame(first_img)
+        self.view.set_boxes(saved_boxes, labels)
+        self.view.on_select = self._highlight_row
+
+        self._clear_form()
+        for i in range(len(self.first_boxes)):
+            row = QHBoxLayout()
+            btn = QPushButton(f"Khung #{i + 1}"); btn.setCheckable(True); btn.setFixedWidth(95)
+            btn.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
+                              "QPushButton:checked{background:#c8a000;color:#000;}")
+            btn.clicked.connect(lambda _=False, k=i: self._select_box(k))
+            self.id_buttons.append(btn); row.addWidget(btn)
+            row.addWidget(QLabel("→ id_"))
+            edit = self._make_id_combo()
+            edit.setCurrentText(saved_ids[i] if i < len(saved_ids) else "")
+            if suggest_colors and i < len(suggest_colors) and suggest_colors[i]:
+                edit.setStyleSheet(f"QComboBox{{border:2px solid {suggest_colors[i]};}}")
+            self.id_inputs.append(edit); row.addWidget(edit); row.addStretch()
+            w = QWidget(); w.setLayout(row); self.form.addWidget(w)
+        if self.id_buttons:
+            self._highlight_row(0)
+
+    def _suggest_ids(self, first_img, saved_boxes):
+        """Gợi ý id theo ngoại hình, khớp 1-1 (mỗi id chỉ gán 1 người). Trả về (ids, màu)."""
+        n = len(saved_boxes)
+        embs = [gallery.embed(first_img[y1:y2, x1:x2]) for (x1, y1, x2, y2) in saved_boxes]
+        pairs = []
+        for i, e in enumerate(embs):
+            if e is None:
+                continue
+            for idv, vecs in self._gallery.items():
+                s = max(float(np.dot(e, v)) for v in vecs)
+                pairs.append((s, i, idv))
+        pairs.sort(reverse=True)
+        ids = [""] * n; colors = [None] * n
+        used_i, used_id = set(), set()
+        for s, i, idv in pairs:
+            if i in used_i or idv in used_id:
+                continue
+            if s < 0.45:                       # quá thấp -> để trống, gõ tay
+                break
+            used_i.add(i); used_id.add(idv)
+            ids[i] = idv
+            colors[i] = "#28a745" if s >= 0.62 else "#d0a000"   # xanh chắc / vàng ngờ
+        return ids, colors
+
     def reset_boxes(self):
         """Khôi phục các khung cắt về tự động (bỏ chỉnh tay)."""
         if self.auto_crops:
             labels = [str(i + 1) for i in range(len(self.auto_crops))]
             self.view.set_boxes([list(b) for b in self.auto_crops], labels)
+
+    # ---- Bộ nhớ id (gallery theo ngoại hình) ----
+    def build_gallery(self):
+        """Mở ảnh quy tắc, gán 01–21 một lần để tạo bộ nhớ id."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        rp = next((os.path.join(here, n) for n in ("rulev2.jpg", "rule.png", "rulepic.png")
+                   if os.path.exists(os.path.join(here, n))), None)
+        start = rp if rp else _start_dir("")
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn ảnh quy tắc (đánh số người)",
+                                              start, "Ảnh (*.png *.jpg *.jpeg *.bmp)")
+        if not path:
+            return
+        img = cv2.imread(path)
+        if img is None:
+            QMessageBox.warning(self, "Lỗi", "Không đọc được ảnh."); return
+        self.statusBar().showMessage("Đang phát hiện người trong ảnh quy tắc..."); QApplication.processEvents()
+        try:
+            boxes, kpts = detect(img)
+        except Exception as e:
+            QMessageBox.critical(self, "Lỗi YOLO", str(e)); return
+        order = order_boxes(boxes, kpts)
+        self._save_current_state()                 # lưu folder thật trước khi chuyển sang chế độ gallery
+        self._current_folder = None                # tránh ghi đè state folder
+        self.frames = [path]
+        self.first_boxes = [boxes[i] for i in order]
+        self.first_kpts = [kpts[i] for i in order]
+        h0, w0 = img.shape[:2]
+        self.auto_crops = [list(crop_region(self.first_boxes[i], self.first_kpts[i], w0, h0))
+                           for i in range(len(self.first_boxes))]
+        self._gallery_img = img
+        self._populate_ui(img, [list(b) for b in self.auto_crops], ["" for _ in self.first_boxes])
+        self.btn_savegal.setEnabled(True)
+        self.tabs.setCurrentIndex(0)
+        QMessageBox.information(self, "Tạo bộ nhớ id",
+            "Gán 01–21 cho từng người (theo ảnh quy tắc), chỉnh khung nếu cần, "
+            "rồi nhấn '💾 Lưu bộ nhớ id'.")
+
+    def save_gallery_now(self):
+        """Tính đặc trưng từng người đã gán id và lưu thành bộ nhớ id."""
+        if getattr(self, "_gallery_img", None) is None:
+            return
+        img = self._gallery_img
+        gal = {}
+        for i, edit in enumerate(self.id_inputs):
+            idv = edit.currentText().strip()
+            if not idv:
+                continue
+            x1, y1, x2, y2 = self.view.boxes[i]
+            e = gallery.embed(img[y1:y2, x1:x2])
+            if e is not None:
+                gal.setdefault(idv, []).append(e)
+        if not gal:
+            QMessageBox.warning(self, "Chưa gán id", "Hãy gán id cho ít nhất một người."); return
+        gallery.save_gallery(gal)
+        self._gallery = gallery.load_gallery()
+        self._gallery_img = None
+        self.btn_savegal.setEnabled(False)
+        QMessageBox.information(self, "Đã lưu bộ nhớ id",
+            f"Đã ghi nhớ {len(gal)} id. Từ giờ mở folder sẽ TỰ GỢI Ý id "
+            f"(viền xanh = chắc, vàng = nên kiểm).")
 
     def _show_frame_pos(self, key):
         """Đổi ảnh nền sang frame ĐẦU/GIỮA/CUỐI để so sánh (giữ nguyên khung)."""
@@ -744,6 +843,14 @@ class MainWindow(QMainWindow):
             self.path_edit.setText(folder)
             self.load_and_detect()
         self.tabs.setCurrentIndex(0)      # quay về tab Làm việc
+
+    def _make_id_combo(self):
+        """Ô chọn id 1..21 (vẫn gõ tay được)."""
+        cb = QComboBox(); cb.setEditable(True); cb.setFixedWidth(80)
+        cb.addItem("")                                     # trống = bỏ qua
+        cb.addItems([str(n) for n in range(1, 22)])        # 1..21
+        cb.lineEdit().setPlaceholderText("bỏ")
+        return cb
 
     def _collect_mapping(self):
         """track_id (1..K) -> id_str, chỉ lấy ô có nhập."""

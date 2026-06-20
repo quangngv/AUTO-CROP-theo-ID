@@ -27,6 +27,9 @@ _TRACK_IOU = 0.3                      # ngưỡng IoU để coi là cùng một 
 
 # ----- Đánh số -----
 _NUM_ROWS = 3                         # số HÀNG ghế trong phòng (đánh số dưới->trên, trái->phải)
+# Bỏ người bị CẮT ở rìa TRÁI khung hình (giám sát/qua đường, nửa người ngoài khung).
+# CHỈ bên trái (giữ sinh viên sát mép phải). Khung x1 <= _DROP_EDGE_PX px -> bỏ. 0 = TẮT.
+_DROP_EDGE_PX = 5
 
 # ----- Cắt theo điểm khớp (pose): chân dung ĐẦU + NỬA NGỰC -----
 # Mọi khoảng cách đo theo BỀ RỘNG VAI (S) - ổn định kể cả khi người CÚI/CHỒM xuống
