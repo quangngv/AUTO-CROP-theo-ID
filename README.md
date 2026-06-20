@@ -1,6 +1,6 @@
 # ✂️ AUTO CROP theo ID — Tạo dataset từng người từ video
 
-Ứng dụng desktop sử dụng **YOLOv8/YOLOv26 Pose** và **PyQt5** để tự động phát hiện, bám theo (tracking), và cắt ảnh chân dung từng người qua tất cả frame trích từ video.
+Ứng dụng desktop sử dụng **YOLO Pose** và **PyQt5** để tự động phát hiện, bám theo (tracking), và cắt ảnh chân dung từng người qua tất cả frame trích từ video. Hỗ trợ **gợi ý ID tự động** dựa trên ngoại hình (ResNet50 + màu áo).
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![PyQt5](https://img.shields.io/badge/GUI-PyQt5-green)
@@ -19,6 +19,7 @@
   - [Bước 4: Tải model YOLO](#bước-4-tải-model-yolo)
 - [Chạy ứng dụng](#-chạy-ứng-dụng)
 - [Hướng dẫn sử dụng](#-hướng-dẫn-sử-dụng)
+- [Bộ nhớ ID — Gợi ý tự động](#-bộ-nhớ-id--gợi-ý-tự-động)
 - [Cấu trúc thư mục](#-cấu-trúc-thư-mục)
 - [Cấu hình nâng cao](#-cấu-hình-nâng-cao)
 - [Xử lý lỗi thường gặp](#-xử-lý-lỗi-thường-gặp)
@@ -32,6 +33,7 @@
 - 🧹 **Khử trùng theo Pose**: Loại bỏ bounding box trùng bằng khoảng cách đầu — người bị che vẫn được giữ
 - 🏃 **Tracking**: Bám theo từng người qua tất cả frame bằng greedy IoU matching
 - 🖱️ **Chỉnh tay**: Kéo cạnh/góc/di chuyển khung cắt trực tiếp trên ảnh (8 handle)
+- 🧠 **Gợi ý ID tự động**: So khớp ngoại hình (ResNet50 + màu áo) với bộ nhớ ID đã lưu
 - 📁 **Batch processing**: Xử lý nhiều folder video cùng lúc, áp ID mẫu cho tất cả
 - 💾 **Cache thông minh**: Nhớ trạng thái khi chuyển giữa các folder; lưu phiên làm việc ra đĩa
 
@@ -45,7 +47,7 @@
 | **Python** | 3.8+ | 3.10 – 3.11 |
 | **RAM** | 4GB | 8GB+ |
 | **GPU** | Không bắt buộc | NVIDIA GPU có CUDA (nhanh hơn 5-10x) |
-| **Ổ cứng** | ~500MB (model + thư viện) | SSD |
+| **Ổ cứng** | ~1GB (model + thư viện) | SSD |
 
 ---
 
@@ -91,32 +93,18 @@ source venv/bin/activate
 
 ### Bước 3: Cài thư viện
 
-#### Cách 1: Cài nhanh (1 lệnh)
-
-```bash
-pip install opencv-python numpy PyQt5 ultralytics
-```
-
-#### Cách 2: Cài từ file requirements (nếu có)
-
 ```bash
 pip install -r requirements.txt
 ```
 
-#### Cách 3: Cài từng thư viện riêng
-
-```bash
-# 1. OpenCV - Xử lý ảnh
-pip install opencv-python
-
-# 2. NumPy - Xử lý mảng số
-pip install numpy
-
-# 3. PyQt5 - Giao diện đồ họa
-pip install PyQt5
-
-# 4. Ultralytics - Framework YOLO (tự cài kèm PyTorch)
-pip install ultralytics
+Nội dung `requirements.txt`:
+```
+opencv-python>=4.5.0
+numpy>=1.20.0
+PyQt5>=5.15.0
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
 ```
 
 #### 🎮 Cài PyTorch với CUDA (nếu có GPU NVIDIA)
@@ -129,9 +117,6 @@ nvidia-smi
 
 # Cài PyTorch với CUDA 11.8 (phổ biến nhất)
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
-
-# Hoặc CUDA 12.1
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
 > Xem thêm tại [pytorch.org](https://pytorch.org/get-started/locally/) để chọn đúng phiên bản CUDA.
@@ -139,18 +124,16 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 #### Kiểm tra cài đặt thành công
 
 ```bash
-python -c "import cv2; import numpy; import PyQt5; from ultralytics import YOLO; print('✅ Tất cả thư viện OK!')"
+python -c "import cv2; import numpy; import PyQt5; from ultralytics import YOLO; import torch; import torchvision; print('✅ Tất cả thư viện OK!')"
 ```
 
 ### Bước 4: Tải model YOLO
 
 Dự án cần file model pose. Có 2 cách:
 
-**Cách 1**: Model đã có sẵn trong thư mục dự án (`yolo26m-pose.pt` hoặc `yolov8m-pose.pt`) → không cần làm gì thêm.
+**Cách 1**: Model đã có sẵn trong thư mục dự án (`yolo26m-pose.pt`) → không cần làm gì thêm.
 
 **Cách 2**: Tự động tải lần đầu chạy — Ultralytics sẽ tự tải nếu không tìm thấy file.
-
-**Cách 3**: Tải thủ công từ [Ultralytics releases](https://github.com/ultralytics/assets/releases) và đặt vào thư mục dự án.
 
 ---
 
@@ -176,9 +159,10 @@ python main.py
 
 1. **Chọn folder**: Nhấn `📂 Chọn...` → chọn thư mục chứa các frame ảnh (trích từ video)
 2. **Phát hiện**: Nhấn `🔍 Tải & phát hiện` → app chạy YOLO, hiển thị khung cắt trên frame đầu
-3. **Chỉnh khung** (nếu cần): Kéo cạnh/góc/di chuyển khung trực tiếp trên ảnh
-4. **Gán ID**: Chọn ID từ dropdown hoặc gõ số cho từng người ở cột bên phải (để trống = bỏ qua)
-5. **Xuất**: Nhấn `🚀 Xử lý & xuất tất cả` → app xử lý toàn bộ frame
+3. **Gợi ý ID**: Nếu đã có bộ nhớ ID, app tự gợi ý — viền **xanh** = chắc chắn, viền **vàng** = nên kiểm tra lại
+4. **Chỉnh khung** (nếu cần): Kéo cạnh/góc/di chuyển khung trực tiếp trên ảnh
+5. **Gán ID**: Chọn ID từ dropdown hoặc gõ số cho từng người ở cột bên phải (để trống = bỏ qua)
+6. **Xuất**: Nhấn `🚀 Xử lý & xuất tất cả` → app xử lý toàn bộ frame
 
 ### Chế độ batch (nhiều folder)
 
@@ -208,6 +192,24 @@ Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị tr
 
 ---
 
+## 🧠 Bộ nhớ ID — Gợi ý tự động
+
+### Cách tạo bộ nhớ ID lần đầu
+
+1. Nhấn `🧠 Bộ nhớ id` → chọn ảnh quy tắc (ảnh chụp tất cả sinh viên đã đánh số)
+2. App tự phát hiện người trong ảnh, hiện khung cắt
+3. Gán số ID (01–21) cho từng người theo đúng ảnh quy tắc
+4. Nhấn `💾 Lưu bộ nhớ id` → app trích đặc trưng ResNet50 + màu áo → lưu vào `gallery.json`
+
+### Cách hoạt động
+
+- Khi mở folder mới, app tự động so khớp ngoại hình từng người với bộ nhớ đã lưu
+- **Viền xanh** (`s ≥ 0.62`): ID chắc chắn — có thể tin tưởng
+- **Viền vàng** (`0.45 ≤ s < 0.62`): ID nghi ngờ — nên kiểm tra lại
+- **Không viền** (`s < 0.45`): ID không tự động — cần gán tay
+
+---
+
 ## 📁 Cấu trúc thư mục
 
 ```
@@ -215,8 +217,11 @@ test1/
 ├── main.py              # Điểm khởi chạy
 ├── config.py            # Cấu hình model + thông số cắt
 ├── detection.py         # Logic phát hiện, khử trùng, cắt, tracking
-├── gui.py               # Giao diện PyQt5
+├── gui.py               # Giao diện PyQt5 (1073 dòng)
+├── gallery.py           # Bộ nhớ ID theo ngoại hình (ResNet50 + màu)
+├── gallery.json         # Vector đặc trưng đã lưu
 ├── app_state.json       # Lưu phiên làm việc (tự động)
+├── requirements.txt     # Danh sách thư viện cần cài
 ├── start.bat            # Chạy app không hiện terminal
 ├── restart.bat          # Khởi động lại app
 ├── yolo26m-pose.pt      # Model chính (YOLO Pose, mới nhất)
@@ -224,7 +229,8 @@ test1/
 ├── yolov8m.pt           # YOLOv8 Medium (detection thuần)
 ├── yolov8s.pt           # YOLOv8 Small (nhẹ hơn)
 ├── yolov8n.pt           # YOLOv8 Nano (nhẹ nhất)
-├── rule.png             # Ảnh hướng dẫn quy tắc gán ID
+├── rule.png             # Ảnh hướng dẫn quy tắc gán ID (cũ)
+├── rulev2.jpg           # Ảnh quy tắc gán ID (mới)
 ├── PROJECT_EXPLANATION.md   # Giải thích chi tiết dự án
 └── README.md            # File này
 ```
@@ -238,22 +244,22 @@ Mở file `config.py` để điều chỉnh:
 ### Đổi model
 ```python
 _MODEL_NAME = "yolo26m-pose.pt"   # Mặc định: YOLO Pose mới nhất
-# Có thể đổi sang:
-# "yolov8m-pose.pt" — dự phòng
-# "yolov8s-pose.pt" — nhẹ hơn, nhanh hơn
 ```
 
 ### Điều chỉnh ngưỡng phát hiện
 ```python
 _CONF = 0.25        # Tăng lên (0.4-0.5) nếu bị phát hiện nhầm
-                    # Giảm xuống (0.15-0.2) nếu bỏ sót người
-
 _NMS_IOU = 0.5      # Giảm nếu có quá nhiều khung trùng
 ```
 
 ### Khử trùng theo Pose
 ```python
 _HEAD_DUP = 0.5     # 2 khung có đầu cách nhau < 0.5 × bề rộng vai → cùng người
+```
+
+### Bỏ người rìa trái
+```python
+_DROP_EDGE_PX = 5   # Bỏ người có khung x1 <= 5px (bị cắt ở rìa trái). 0 = TẮT
 ```
 
 ### Điều chỉnh vùng cắt
@@ -265,63 +271,31 @@ _SIDE_MARGIN = 0.20    # Nới hai bên khung cắt
 _MARGIN_PX = 7         # Padding pixel cố định
 ```
 
-### Đổi thư mục mặc định
-```python
-_DEFAULT_DIR = r"C:\Users\Admin\Desktop\2025.2\thuctap\video\savevideo"
-# Đổi thành đường dẫn bạn hay dùng
-```
-
 ---
 
 ## ❗ Xử lý lỗi thường gặp
 
-### 1. `ModuleNotFoundError: No module named 'cv2'`
+### 1. `ModuleNotFoundError`
 ```bash
-pip install opencv-python
+pip install -r requirements.txt
 ```
 
-### 2. `ModuleNotFoundError: No module named 'PyQt5'`
-```bash
-pip install PyQt5
-```
-
-### 3. `ModuleNotFoundError: No module named 'ultralytics'`
-```bash
-pip install ultralytics
-```
-
-### 4. `Could not load library libGL` (Linux)
-```bash
-sudo apt-get install libgl1-mesa-glx
-# hoặc
-pip install opencv-python-headless
-```
-
-### 5. YOLO chạy chậm (dùng CPU)
-- Cài PyTorch với CUDA (xem [Bước 3](#-cài-pytorch-với-cuda-nếu-có-gpu-nvidia))
+### 2. YOLO chạy chậm (dùng CPU)
+- Cài PyTorch với CUDA
 - Hoặc đổi sang model nhẹ hơn trong `config.py`:
 ```python
-_MODEL_NAME = "yolov8s-pose.pt"  # Small: nhanh hơn ~2x
-# hoặc
-_MODEL_NAME = "yolov8n-pose.pt"  # Nano: nhanh nhất
+_MODEL_NAME = "yolov8s-pose.pt"
 ```
 
-### 6. `qt.qpa.plugin: Could not find the Qt platform plugin "windows"`
+### 3. `qt.qpa.plugin: Could not find the Qt platform plugin "windows"`
 ```bash
-# Thử cài lại PyQt5
-pip uninstall PyQt5 PyQt5-sip PyQt5-Qt5
-pip install PyQt5
+pip uninstall PyQt5 PyQt5-sip PyQt5-Qt5 && pip install PyQt5
 ```
 
-### 7. PowerShell không cho chạy script (venv)
+### 4. PowerShell không cho chạy script (venv)
 ```powershell
-# Chạy PowerShell với quyền Admin, rồi:
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
-
-### 8. Frame không tải được
-- Kiểm tra folder chứa file ảnh có đuôi: `.png`, `.jpg`, `.jpeg`, `.bmp`, `.tiff`
-- Tên file nên chứa số để sắp xếp đúng thứ tự (VD: `frame_001.jpg`, `frame_002.jpg`)
 
 ---
 
@@ -329,9 +303,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 - **Dữ liệu đầu vào**: Các frame ảnh trích từ video (khoảng 60 frame/clip), đặt trong 1 folder
 - **Chỉ xử lý frame đầu bằng YOLO**: Các frame sau dùng tracking (IoU) → nhanh hơn nhiều
-- **Khử trùng thông minh**: So sánh khoảng cách đầu — người bị che một phần vẫn được giữ
+- **Gợi ý ID**: Cần tạo bộ nhớ ID trước bằng nút `🧠 Bộ nhớ id`
 - **Delta chỉnh tay**: Nếu bạn chỉnh khung ở frame đầu, phần chênh lệch sẽ được áp dụng cho tất cả frame sau
-- **Xem frame Đầu/Giữa/Cuối**: Giữ nguyên khung cắt để kiểm tra chất lượng tracking
 - **Cache**: Khi chuyển folder trong batch mode, trạng thái ID + khung được lưu lại, quay lại không mất
 
 ---

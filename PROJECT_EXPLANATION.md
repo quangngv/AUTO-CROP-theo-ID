@@ -4,6 +4,8 @@
 
 Dự án này là một ứng dụng **tự động cắt ảnh chân dung từng người** từ các frame video đã được trích xuất sẵn (khoảng 60 frame/clip). Ứng dụng sử dụng **YOLO Pose** để phát hiện người và 17 điểm khớp cơ thể COCO, sau đó **tracking (bám theo)** từng người qua tất cả frame để tạo ra dataset ảnh riêng cho mỗi cá nhân.
 
+Điểm đặc biệt: ứng dụng có **bộ nhớ ID theo ngoại hình** — dùng ResNet50 (ImageNet) + histogram màu áo để tự động gợi ý ID khi mở folder mới, giảm thao tác gán tay.
+
 ### Ứng dụng thực tế
 - Tạo **dataset khuôn mặt/chân dung** cho từng người từ video giám sát
 - Phục vụ cho **nhận dạng khuôn mặt**, huấn luyện model AI
@@ -15,19 +17,22 @@ Dự án này là một ứng dụng **tự động cắt ảnh chân dung từn
 
 ```
 test1/
-├── main.py              # Điểm khởi chạy - chỉ tạo cửa sổ PyQt5
-├── config.py            # Cấu hình: thông số model, ngưỡng phát hiện, tham số cắt
-├── detection.py         # Xử lý ảnh: phát hiện người, khử trùng, cắt khung, tracking
-├── gui.py               # Giao diện đồ họa PyQt5 (cửa sổ chính + editor khung cắt)
+├── main.py              # Điểm khởi chạy — tạo cửa sổ PyQt5 Fusion
+├── config.py            # Cấu hình: model, ngưỡng phát hiện, tham số cắt
+├── detection.py         # Xử lý ảnh: detect, khử trùng, crop, tracking, đánh số
+├── gui.py               # Giao diện PyQt5 (1073 dòng)
+├── gallery.py           # Bộ nhớ ID: ResNet50 + màu áo → gợi ý ID
+├── gallery.json         # Vector đặc trưng đã lưu (tự động)
 ├── app_state.json       # Lưu phiên làm việc (tự động, bị gitignore)
-├── start.bat            # Script chạy app không hiện terminal (dùng pythonw)
-├── restart.bat          # Script khởi động lại app
-├── yolo26m-pose.pt      # Model YOLO Pose mới nhất (~53MB) - model chính
-├── yolov8m-pose.pt      # Model YOLOv8 Medium Pose (~53MB) - dự phòng
-├── yolov8m.pt           # Model YOLOv8 Medium (~52MB) - detection thuần
-├── yolov8s.pt           # Model YOLOv8 Small (~22MB)
-├── yolov8n.pt           # Model YOLOv8 Nano (~6.5MB)
-└── rule.png             # Ảnh bộ quy tắc gán ID (hướng dẫn cho người dùng)
+├── requirements.txt     # Danh sách dependency
+├── start.bat            # Chạy app không hiện terminal
+├── restart.bat          # Khởi động lại app
+├── yolo26m-pose.pt      # Model YOLO Pose mới nhất (~53MB)
+├── yolov8m-pose.pt      # YOLOv8 Medium Pose dự phòng (~53MB)
+├── yolov8m.pt / s.pt / n.pt  # Các model YOLO khác
+├── rule.png             # Ảnh quy tắc gán ID (cũ)
+├── rulev2.jpg           # Ảnh quy tắc gán ID (mới)
+└── PROJECT_EXPLANATION.md / README.md
 ```
 
 ---
@@ -36,170 +41,141 @@ test1/
 
 ### 1. `main.py` — Điểm khởi chạy
 
-File rất ngắn gọn, chỉ làm 2 việc:
-- Tạo ứng dụng PyQt5 với style **Fusion** (giao diện hiện đại, đồng nhất trên mọi OS)
-- Khởi tạo và hiển thị cửa sổ chính `MainWindow`
-
+```python
+# Tạo app PyQt5 Fusion style → MainWindow → exec
+app = QApplication(sys.argv)
+app.setStyle("Fusion")
+win = MainWindow()
+win.show()
+sys.exit(app.exec_())
 ```
-Chạy: python main.py
-```
 
-### 2. `start.bat` / `restart.bat` — Script tiện ích
-
-- `start.bat`: Tìm `pythonw.exe` để chạy app không hiện cửa sổ terminal
-- `restart.bat`: Dùng `taskkill` đóng app cũ (theo tiêu đề cửa sổ), sau đó khởi động lại
-
-### 3. `config.py` — Cấu hình & tải model
-
-Chứa **tất cả thông số tinh chỉnh** của ứng dụng, chia thành các nhóm:
+### 2. `config.py` — Cấu hình & tải model
 
 | Nhóm | Thông số | Giá trị | Ý nghĩa |
 |------|----------|---------|----------|
-| **Model** | `_MODEL_NAME` | `yolo26m-pose.pt` | Model YOLO Pose dùng để phát hiện người + 17 điểm khớp |
-| **Phát hiện** | `_CONF` | 0.25 | Ngưỡng tin cậy để coi là "có người" |
-| | `_NMS_IOU` | 0.5 | Non-Maximum Suppression - loại bỏ khung chồng nhau |
-| **Khử trùng** | `_HEAD_DUP` | 0.5 | 2 khung có đầu cách nhau < 0.5 × bề rộng vai → cùng 1 người |
-| | `_CONTAIN_THR` | 0.85 | Khung con nằm trong khung cha (dự phòng) |
-| | `_DUP_AREA_RATIO` | 0.75 | Tỉ lệ diện tích để xác định khung trùng (dự phòng) |
-| **Tracking** | `_TRACK_IOU` | 0.3 | Ngưỡng IoU để khớp cùng 1 người giữa 2 frame |
-| **Đánh số** | `_NUM_ROWS` | 3 | Số hàng ghế trong phòng (đánh số dưới→trên, trái→phải) |
-| **Cắt Pose** | `_KP_CONF` | 0.30 | Ngưỡng tin cậy của từng điểm khớp |
-| | `_CROWN_FACTOR` | 0.65 | Ước lượng đỉnh đầu (tránh cắt lẹm tóc) |
-| | `_FINGER_FACTOR` | 0.60 | Nới vùng cắt khi tay giơ (lấy đủ ngón) |
-| | `_TORSO_FACTOR` | 1.25 | Đáy cắt: dưới vai × hệ số (tới ngực) |
-| | `_SIDE_MARGIN` | 0.20 | Nới hai bên khung cắt theo bề rộng |
-| | `_MARGIN_PX` | 7 | Nới thêm cố định (pixel) |
-| | `_PAD` | 0.12 | Padding fallback khi thiếu điểm khớp |
+| **Model** | `_MODEL_NAME` | `yolo26m-pose.pt` | Model YOLO Pose chính |
+| **Phát hiện** | `_CONF` | 0.25 | Ngưỡng tin cậy "có người" |
+| | `_NMS_IOU` | 0.5 | Non-Maximum Suppression |
+| **Khử trùng** | `_HEAD_DUP` | 0.5 | Khoảng cách đầu tối đa (× vai) để coi là cùng người |
+| | `_CONTAIN_THR` | 0.85 | Dự phòng: khung con trong khung cha |
+| | `_DUP_AREA_RATIO` | 0.75 | Dự phòng: tỉ lệ diện tích trùng |
+| **Cắt rìa** | `_DROP_EDGE_PX` | 5 | Bỏ người bị cắt ở rìa TRÁI (x1 ≤ 5px). 0 = tắt |
+| **Tracking** | `_TRACK_IOU` | 0.3 | Ngưỡng IoU để khớp cùng người giữa 2 frame |
+| **Đánh số** | `_NUM_ROWS` | 3 | Số hàng ghế (đánh số dưới→trên, trái→phải) |
+| **Cắt Pose** | `_KP_CONF` | 0.30 | Ngưỡng tin cậy điểm khớp |
+| | `_CROWN_FACTOR` | 0.65 | Ước lượng đỉnh đầu |
+| | `_FINGER_FACTOR` | 0.60 | Nới tay giơ |
+| | `_TORSO_FACTOR` | 1.25 | Đáy cắt (tới ngực) |
+| | `_SIDE_MARGIN` | 0.20 | Nới hai bên |
+| | `_MARGIN_PX` | 7 | Padding cố định (px) |
+| | `_PAD` | 0.12 | Padding fallback khi thiếu keypoints |
 
-**Hàm `get_model()`**: Singleton pattern — tải model YOLO một lần duy nhất và tái sử dụng.
+**`get_model()`**: Singleton — tải model YOLO một lần, tái sử dụng.
 
-### 4. `detection.py` — Xử lý ảnh (không dính giao diện)
+### 3. `detection.py` — Lõi xử lý ảnh
 
-Đây là **lõi xử lý** của ứng dụng, gồm các phần:
-
-#### a) Tiện ích hình học
-- **`_iou(a, b)`**: Tính Intersection over Union giữa 2 bounding box — thước đo mức độ trùng lặp
-- **`_contain_ratio(a, b)`**: Tỉ lệ phần giao so với khung nhỏ hơn — phát hiện khung con nằm trong khung cha
-
-#### b) Phát hiện người — `detect(image)`
+#### a) Phát hiện — `detect(image)`
 ```
-Input:  Ảnh BGR (OpenCV)
-Output: (boxes, kpts)
-  - boxes: danh sách [x1, y1, x2, y2] - khung bao người
-  - kpts:  danh sách mảng (17, 3) - 17 điểm khớp COCO [x, y, confidence]
+Input:  Ảnh BGR
+Output: (boxes, kpts) — đã khử trùng
 ```
 
 Quy trình:
-1. Chạy model YOLO Pose → lấy bounding box + 17 keypoints
-2. **Khử trùng theo Pose**: So sánh khoảng cách giữa các **điểm đầu** (mũi/mắt/tai), chuẩn hóa theo bề rộng vai:
-   - 2 khung có đầu cách nhau < `_HEAD_DUP × bề rộng vai` → cùng 1 người → bỏ khung nhỏ hơn
-   - Người bị che một phần có vị trí đầu khác → vẫn được giữ lại
-   - Dự phòng: IoU > 0.7 cũng coi là trùng (khi thiếu keypoints)
+1. Chạy YOLO Pose → boxes + 17 keypoints
+2. **Khử trùng theo Pose**: Sắp xếp khung lớn→nhỏ, so sánh **khoảng cách đầu** (mũi/mắt/tai) chuẩn hóa theo bề rộng vai. Nếu khoảng cách < `_HEAD_DUP × scale` → cùng người → bỏ khung nhỏ. Dự phòng: IoU > 0.7
+3. **Bỏ rìa trái**: Nếu `_DROP_EDGE_PX > 0`, loại người có `x1 ≤ _DROP_EDGE_PX` (thường là người qua đường, bị cắt nửa người)
 
-#### c) Cắt khung thông minh — `crop_region(box, kpts, w, h)`
+#### b) Cắt thông minh — `crop_region(box, kpts, w, h)`
 
-Đây là thuật toán cốt lõi, cắt vùng **đầu + nửa ngực** sử dụng 17 điểm khớp COCO:
+Dùng **bề rộng vai (S)** làm thước đo:
 
-```
-Điểm khớp COCO sử dụng:
-  0: Mũi          5-6: Vai
-  1-2: Mắt        7-8: Khuỷu tay
-  3-4: Tai        9-10: Cổ tay
-                   11-12: Hông (không dùng — bỏ chân)
-```
+1. **Đỉnh đầu** = `head_top - 0.65×S` (ước lượng đỉnh sọ, tránh lẹm tóc)
+2. **Tay giơ**: Nếu cổ tay (keypoint 9,10) cao hơn đỉnh → nới lên `cổ_tay - 0.60×S` (lấy đủ ngón). Nếu khuỷu (7,8) cao → nới đến khuỷu
+3. **Đáy**: `vai + 1.25×S` (dừng quanh ngực, không xuống bàn)
+4. **Hai bên**: Nới 20% bề rộng + 7px. Chỉ tính tay đang giơ nếu ở trên ngực
+5. **Fallback**: Thiếu keypoints → `bbox + padding 12%`
 
-**Thuật toán**:
-1. Lấy **bề rộng vai (S)** làm thước đo (ổn định khi người cúi/chồm)
-2. **Đỉnh đầu** = điểm cao nhất mắt/tai − 0.65×S (ước lượng đỉnh sọ)
-3. Nếu **tay giơ**: nới trên cổ tay 0.60×S → lấy đủ ngón tay; khuỷu giơ: nới đến khuỷu
-4. **Đáy**: vai + 1.25×S → dừng quanh ngực, không kéo xuống bàn
-5. **Hai bên**: nới 20% bề rộng + 7px cố định, tính cả tay đang giơ (nếu ở trên ngực)
-6. **Fallback**: Khi thiếu khớp đầu/vai → dùng bbox + padding 12%
+#### c) Đánh số — `order_boxes(boxes, kpts)`
 
-#### d) Đánh số thứ tự — `order_boxes(boxes, kpts)`
+Phân cụm 1D theo tọa độ Y của đầu → `_NUM_ROWS` hàng (tối ưu tổng phương sai). Hàng dưới cùng trước, trong hàng từ trái→phải. Dùng **đầu** (không dùng đỉnh khung) → giơ tay không làm số nhảy.
 
-Sắp xếp người theo **hàng** (dùng phân cụm 1D theo tọa độ Y của đầu), chia thành `_NUM_ROWS` hàng:
-- Hàng dưới cùng trước, đi từ **trái → phải**
-- Dùng vị trí **đầu** (không dùng đỉnh khung) → người giơ tay không làm số nhảy loạn
-- Phân cụm bằng tối ưu hóa tổng phương sai (segmentation 1D)
+#### d) Tracking — `IoUTracker`
 
-#### e) Tracking — `IoUTracker`
+Greedy IoU matching: frame đầu → seed IDs, mỗi frame sau tính IoU giữa detection mới và track cũ, ghép cặp cao nhất (ngưỡng ≥ 0.3). Detection không khớp → tạo track mới.
 
-Tracker nhẹ dùng **greedy IoU matching**:
-1. Khởi tạo với các khung từ frame đầu (ID 1, 2, 3...)
-2. Mỗi frame mới: tính IoU giữa detection mới và track cũ
-3. Ghép cặp theo IoU cao nhất (greedy), ngưỡng ≥ 0.3
-4. Detection không khớp → tạo track ID mới
+### 4. `gui.py` — Giao diện PyQt5 (1073 dòng)
 
-#### f) Tiện ích khác
-- **`annotate(image, boxes, labels)`**: Vẽ khung + nhãn lên ảnh (hiển thị)
-- **`list_frames(folder)`**: Liệt kê file ảnh, sắp theo số trong tên file
-- **`find_clip_folders(parent)`**: Tìm các thư mục con có chứa frame ảnh
+#### a) `FrameEditor` — Widget chỉnh khung
 
-### 5. `gui.py` — Giao diện đồ họa PyQt5
+- Hiển thị ảnh canh giữa, giữ tỉ lệ
+- Vẽ khung: vàng (đang chọn) / xanh mờ (khác), 8 tay cầm
+- Kéo cạnh/góc/di chuyển, giữ kích thước tối thiểu, clamp trong ảnh
+- Ưu tiên khung đang chọn khi rê chuột
 
-Gồm 2 class chính:
-
-#### a) `FrameEditor` — Widget hiển thị ảnh + chỉnh khung cắt
-
-- Hiển thị frame ảnh với tỉ lệ, canh giữa trong widget
-- Vẽ các khung cắt (bounding box) lên ảnh
-- Cho phép **kéo cạnh/góc/di chuyển** từng khung cắt bằng chuột
-- Hỗ trợ 8 tay cầm (handle): 4 góc + 4 cạnh
-- Ánh xạ tọa độ chuột ↔ tọa độ ảnh gốc (scale + offset)
-- Khung đang chọn: viền vàng, nổi bật; khung khác: viền xanh mờ
-- Ưu tiên khung đang chọn khi rê chuột (kể cả khi bị khung khác đè)
-
-#### b) `MainWindow` — Cửa sổ chính
-
-Giao diện chia 3 phần (dùng QSplitter — kéo được):
+#### b) `MainWindow` — 3 pane QSplitter
 
 | Vùng | Nội dung |
 |------|----------|
-| **Trái** (ẩn/hiện) | Dải thumbnail các folder đã chọn (batch mode) + nút chọn nhanh |
-| **Giữa** (chính) | Frame ảnh + editor khung cắt + nút xem Đầu/Giữa/Cuối |
-| **Phải** | Form gán ID dùng QComboBox (dropdown + gõ tay) cho từng khung |
+| **Trái** | Thumbnail các folder batch, ✓/▶ đánh dấu, chuột phải xóa, phím Delete |
+| **Giữa** | FrameEditor + nút Đầu/Giữa/Cuối + Khôi phục khung |
+| **Phải** | Form gán ID (QComboBox 1–21), nút Khung#, gợi ý màu viền |
 
-**Các chức năng chính**:
+**Các nút chức năng:**
+- `🧠 Bộ nhớ id` — Mở ảnh quy tắc → detect → gán ID → lưu gallery
+- `💾 Lưu bộ nhớ id` — Tính đặc trưng ResNet50 + màu → lưu `gallery.json`
+- `🔍 Tải & phát hiện` — Detect YOLO + tự gợi ý ID nếu có gallery
+- `🚀 Xử lý & xuất tất cả` — Track + cắt tất cả frame
+- `🌐 Gán 1 lần → xuất TẤT CẢ folder` — Batch với IoU matching + chọn phạm vi
+- `↺ Khôi phục khung tự động` — Bỏ chỉnh tay
 
-1. **Chọn folder đơn**: `📂 Chọn...` → chọn 1 folder chứa frame
-2. **Chọn nhiều folder**: `📁 Chọn nhiều folder...` → batch processing (dùng `DontUseNativeDialog` + `ExtendedSelection`)
-3. **Tải & phát hiện**: `🔍 Tải & phát hiện` → chạy YOLO trên frame đầu
-4. **Gán ID**: Chọn ID từ dropdown (1-21) hoặc gõ tay
-5. **Chỉnh khung**: Kéo cạnh/góc trên ảnh để tinh chỉnh vùng cắt
-6. **Khôi phục khung**: `↺ Khôi phục khung tự động` → bỏ chỉnh tay
-7. **Xuất**: `🚀 Xử lý & xuất tất cả` → track + cắt qua tất cả frame
-8. **Batch**: `🌐 Gán 1 lần → xuất TẤT CẢ folder` → áp ID mẫu cho nhiều folder (hỗ trợ chọn phạm vi như "1-5, 7, 9-12")
-9. **Xem frame Đầu/Giữa/Cuối**: Kiểm tra tracking mà không mất khung đã chỉnh
-10. **Lịch sử**: Tab "Lịch sử" hiển thị các folder đã làm, bấm để mở lại
+**Gợi ý ID tự động** (`_suggest_ids`):
+- Trích đặc trưng từng khung cắt → cosine similarity với gallery
+- Ghép 1-1 (mỗi ID chỉ gán 1 người)
+- Viền xanh (`s ≥ 0.62`) / vàng (`0.45 ≤ s < 0.62`) / không viền
 
-**Caching**:
-- Trong phiên: lưu cache `_cache` (giữ cả detection YOLO để không chạy lại)
-- Ra đĩa: lưu `app_state.json` (queue, done, edits) — khôi phục khi mở lại app
-- **Lưu cửa sổ**: QSettings lưu kích thước, vị trí, trạng thái phóng to, vạch chia splitter
+### 5. `gallery.py` — Bộ nhớ ID theo ngoại hình
+
+#### Kiến trúc đặc trưng kết hợp
+
+```
+Đặc trưng = [ √0.45 × CNN(ResNet50) ; √0.55 × Color(HSV) ]   (2048 + 324 = 2372 chiều)
+```
+
+- **CNN** (`ResNet50`, ImageNet, bỏ lớp fc): Trích dáng người, kết cấu quần áo
+- **Màu** (histogram H+S vùng thân 32%–98% cao, 18%–82% rộng): Bất biến tỉ lệ, lọc nền, Hellinger normalization
+- Cosine similarity trên vector kết hợp
+
+#### Quy trình
+
+1. `build_gallery()`: Mở ảnh quy tắc → detect → gán ID → `save_gallery_now()` → `embed()` từng crop → lưu vector
+2. `load_and_detect()`: Nếu có gallery và ID chưa gán → `_suggest_ids()` → cosine match + greedy 1-1
+3. `gallery.json`: Dictionary `{id: [vector, ...]}`
 
 ---
 
 ## 🔄 Luồng hoạt động chính
 
 ```
-1. Người dùng chọn folder chứa ~60 frame (trích từ video)
+1. Người dùng chọn folder chứa ~60 frame
                     ↓
 2. App chạy YOLO Pose trên FRAME ĐẦU TIÊN
-   → Phát hiện tất cả người + 17 điểm khớp cơ thể
-   → Khử trùng (so sánh khoảng cách ĐẦU)
-   → Tính vùng cắt thông minh (đầu + nửa ngực)
+   → Phát hiện người + 17 keypoints
+   → Khử trùng (khoảng cách đầu)
+   → Bỏ rìa trái (DROP_EDGE_PX)
+   → Tính vùng cắt (đầu + nửa ngực)
+   → Gợi ý ID (nếu có gallery)
                     ↓
-3. Hiển thị frame với các khung cắt, đánh số #1, #2, #3...
-   → Người dùng chỉnh khung cắt bằng chuột (nếu cần)
-   → Gõ ID thật cho từng người (VD: "1", "2", để trống = bỏ)
+3. Hiển thị frame với khung cắt, đánh số #1, #2...
+   → Viền xanh/vàng nếu ID được gợi ý tự động
+   → Người dùng kiểm tra, chỉnh khung/sửa ID nếu cần
                     ↓
 4. Nhấn "Xử lý & xuất tất cả"
    → IoU Tracker bám theo từng người qua TẤT CẢ frame
    → Cắt ảnh chân dung cho mỗi frame
-   → Áp delta chỉnh tay (nếu có) lên khung cắt tự động
-   → Nếu frame mất dấu: giữ khung lần gần nhất để cắt
-   → Lưu vào: <folder>/id_<N>/<tên_frame>.jpg
+   → Áp delta chỉnh tay
+   → Frame mất dấu: giữ khung lần gần nhất
+   → Lưu: <folder>/id_<N>/<tên_frame>.jpg
                     ↓
 5. Kết quả: Mỗi người có folder riêng chứa ~60 ảnh chân dung
 ```
@@ -208,42 +184,20 @@ Giao diện chia 3 phần (dùng QSplitter — kéo được):
 
 ## 🧠 Các thuật toán quan trọng
 
-### IoU (Intersection over Union)
-```
-         Diện tích phần giao
-IoU = ─────────────────────────────
-       Diện tích phần hợp (A ∪ B)
-```
-- IoU = 1.0: hai khung trùng hoàn toàn
-- IoU = 0.0: hai khung không giao nhau
-- Dùng trong: NMS, khử trùng, tracking
-
 ### Khử trùng theo Pose
-Thay vì chỉ dùng IoU, thuật toán khử trùng dùng **vị trí đầu** (trung bình mũi/mắt/tai):
-1. Sắp xếp khung theo diện tích giảm dần → xét khung to trước
-2. Tính khoảng cách đầu giữa 2 khung, chuẩn hóa bằng bề rộng vai
-3. Nếu khoảng cách < `_HEAD_DUP × scale` → cùng người → bỏ khung nhỏ
-4. Dự phòng: IoU > 0.7 cũng coi là trùng
-
-→ **Ưu điểm**: Người bị che khuất một phần có đầu khác vị trí → được giữ lại
-
-### Greedy IoU Tracking
-1. Tính IoU giữa mọi cặp (detection mới, track cũ)
-2. Sắp xếp giảm dần theo IoU
-3. Ghép cặp (detection, track) có IoU cao nhất trước
-4. Mỗi detection/track chỉ được ghép 1 lần
-5. Detection dư → tạo track mới (người mới xuất hiện)
+So sánh khoảng cách đầu (mũi/mắt/tai) chuẩn hóa bằng bề rộng vai → bỏ khung trùng, giữ người bị che.
 
 ### Crop thông minh theo Pose
-- Thước đo = **bề rộng vai (S)** — ổn định hơn khoảng cách đầu-vai (bị co khi cúi)
-- Tự động xử lý: người cúi, tay giơ, bị che một phần
-- Tính cả khuỷu tay giơ cao khi xác định đỉnh khung
-- Fallback: khi YOLO không đủ keypoints → dùng bbox + padding
+Thước đo = bề rộng vai (S). Xử lý: cúi, tay giơ, khuỷu giơ, che một phần.
 
 ### Phân cụm hàng 1D
-- Gom người thành `_NUM_ROWS` hàng dựa trên tọa độ Y của đầu
-- Dùng tối ưu tổng phương sai (segment 1D) để tìm ranh giới hàng
-- Đánh số: hàng dưới cùng trước (dễ nhìn), trong hàng từ trái → phải
+Tối ưu tổng phương sai (`_segment_1d`) → chia `_NUM_ROWS` hàng. Đánh số dưới→trên, trái→phải.
+
+### Gợi ý ID (Appearance Matching)
+Đặc trưng kết hợp ResNet50 (45%) + màu HSV (55%). Cosine similarity → greedy 1-1 matching. Ngưỡng: xanh ≥ 0.62, vàng ≥ 0.45.
+
+### Greedy IoU Tracking
+Tính IoU mọi cặp → sắp xếp giảm dần → ghép cao nhất trước → dư tạo track mới.
 
 ---
 
@@ -251,13 +205,11 @@ Thay vì chỉ dùng IoU, thuật toán khử trùng dùng **vị trí đầu** 
 
 | File | Loại | Kích thước | Dùng cho |
 |------|------|-----------|----------|
-| `yolo26m-pose.pt` | **YOLO Pose (mới)** | ~53MB | **Chính** — phát hiện người + 17 điểm khớp |
-| `yolov8m-pose.pt` | YOLOv8 Medium Pose | ~53MB | Dự phòng (cấu trúc cũ) |
-| `yolov8m.pt` | YOLOv8 Medium | ~52MB | Detection thuần (không keypoints) |
-| `yolov8s.pt` | YOLOv8 Small | ~22MB | Phương án nhẹ hơn |
-| `yolov8n.pt` | YOLOv8 Nano | ~6.5MB | Phương án nhanh nhất |
-
-> **Lưu ý**: Dự án mặc định dùng `yolo26m-pose.pt` vì cần cả keypoints để cắt chân dung chính xác. Các model khác có thể dùng khi đổi `_MODEL_NAME` trong `config.py`.
+| `yolo26m-pose.pt` | **YOLO Pose (mới)** | ~53MB | **Chính** |
+| `yolov8m-pose.pt` | YOLOv8 Medium Pose | ~53MB | Dự phòng |
+| `yolov8m.pt` | YOLOv8 Medium | ~52MB | Detection thuần |
+| `yolov8s.pt` | YOLOv8 Small | ~22MB | Nhẹ hơn |
+| `yolov8n.pt` | YOLOv8 Nano | ~6.5MB | Nhanh nhất |
 
 ---
 
@@ -265,8 +217,9 @@ Thay vì chỉ dùng IoU, thuật toán khử trùng dùng **vị trí đầu** 
 
 | Thư viện | Phiên bản | Vai trò |
 |----------|-----------|---------|
-| **PyQt5** | ≥ 5.15 | Giao diện đồ họa (GUI) |
-| **OpenCV** (`opencv-python`) | ≥ 4.5 | Đọc/ghi ảnh, xử lý hình ảnh |
-| **NumPy** | ≥ 1.20 | Xử lý mảng số |
-| **Ultralytics** | ≥ 8.0 | Framework YOLO (phát hiện + pose estimation) |
-| **PyTorch** | (tự cài kèm Ultralytics) | Backend deep learning cho YOLO |
+| **PyQt5** | ≥ 5.15 | GUI |
+| **OpenCV** | ≥ 4.5 | Đọc/ghi/xử lý ảnh |
+| **NumPy** | ≥ 1.20 | Mảng số |
+| **Ultralytics** | ≥ 8.0 | Framework YOLO |
+| **PyTorch** | ≥ 2.0 | Backend YOLO + ResNet50 |
+| **TorchVision** | ≥ 0.15 | ResNet50 pre-trained |
