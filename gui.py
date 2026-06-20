@@ -3,6 +3,7 @@
 
 import os
 import json
+import math
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import *
@@ -11,7 +12,7 @@ from PyQt5.QtGui import *
 
 from detection import (
     detect, order_boxes, crop_region,
-    list_frames, IoUTracker, _iou,
+    list_frames, IoUTracker,
 )
 from config import _DEFAULT_DIR
 import gallery
@@ -961,17 +962,26 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Hoàn tất{done} — {len(counts)} id, tổng {sum(counts.values())} ảnh.")
 
     @staticmethod
-    def _match_boxes(new_boxes, ref_boxes, thr=0.2):
-        """Khớp 1-1 khung folder mới với khung mẫu theo IoU. Trả về {new_idx: ref_idx}."""
+    def _match_boxes(new_boxes, ref_boxes, max_shift=1.2):
+        """
+        Khớp 1-1 khung folder mới với khung mẫu theo KHOẢNG CÁCH TÂM (bền hơn IoU khi
+        người dịch nhẹ). Chỉ ghép khi tâm cách nhau <= max_shift x bề rộng người mẫu.
+        Trả về {new_idx: ref_idx}.
+        """
+        def cen(b):
+            return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
         pairs = []
         for ni, nb in enumerate(new_boxes):
+            cn = cen(nb)
             for ri, rb in enumerate(ref_boxes):
-                io = _iou(nb, rb)
-                if io >= thr:
-                    pairs.append((io, ni, ri))
-        pairs.sort(reverse=True)
+                cr = cen(rb)
+                d = math.hypot(cn[0] - cr[0], cn[1] - cr[1])
+                gate = (rb[2] - rb[0]) * max_shift
+                if d <= gate:
+                    pairs.append((d, ni, ri))
+        pairs.sort()                       # gần nhất trước
         used_n, used_r, out = set(), set(), {}
-        for io, ni, ri in pairs:
+        for d, ni, ri in pairs:
             if ni in used_n or ri in used_r:
                 continue
             used_n.add(ni); used_r.add(ri); out[ni] = ri
