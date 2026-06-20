@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# YOLO model weights (large binary files)
+*.pt
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# App state
+app_state.json
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Byte-compiled / optimized
+*.pyc
+*.pyo
+
+# Claude
+.claude/
+
+# Rule images
+rule*.png
+
+# Logs
+*.log
