@@ -1,10 +1,10 @@
 # ✂️ AUTO CROP theo ID — Tạo dataset từng người từ video
 
-Ứng dụng desktop sử dụng **YOLOv8 Pose** và **PyQt5** để tự động phát hiện, bám theo (tracking), và cắt ảnh chân dung từng người qua tất cả frame trích từ video.
+Ứng dụng desktop sử dụng **YOLOv8/YOLOv26 Pose** và **PyQt5** để tự động phát hiện, bám theo (tracking), và cắt ảnh chân dung từng người qua tất cả frame trích từ video.
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![PyQt5](https://img.shields.io/badge/GUI-PyQt5-green)
-![YOLOv8](https://img.shields.io/badge/AI-YOLOv8%20Pose-red)
+![YOLO](https://img.shields.io/badge/AI-YOLO%20Pose-red)
 
 ---
 
@@ -16,7 +16,7 @@
   - [Bước 1: Cài Python](#bước-1-cài-python)
   - [Bước 2: Tạo môi trường ảo (khuyên dùng)](#bước-2-tạo-môi-trường-ảo-khuyên-dùng)
   - [Bước 3: Cài thư viện](#bước-3-cài-thư-viện)
-  - [Bước 4: Tải model YOLOv8](#bước-4-tải-model-yolov8)
+  - [Bước 4: Tải model YOLO](#bước-4-tải-model-yolo)
 - [Chạy ứng dụng](#-chạy-ứng-dụng)
 - [Hướng dẫn sử dụng](#-hướng-dẫn-sử-dụng)
 - [Cấu trúc thư mục](#-cấu-trúc-thư-mục)
@@ -27,12 +27,13 @@
 
 ## ✨ Tính năng
 
-- 🔍 **Phát hiện tự động**: Dùng YOLOv8 Pose phát hiện người + điểm khớp cơ thể
-- ✂️ **Cắt thông minh**: Cắt chân dung đầu + nửa ngực, bao gồm cả tay giơ
-- 🏃 **Tracking**: Bám theo từng người qua tất cả frame bằng IoU matching
-- 🖱️ **Chỉnh tay**: Kéo cạnh/góc/di chuyển khung cắt trực tiếp trên ảnh
-- 📁 **Batch processing**: Xử lý nhiều folder video cùng lúc
-- 💾 **Cache thông minh**: Nhớ trạng thái khi chuyển giữa các folder
+- 🔍 **Phát hiện tự động**: Dùng YOLO Pose phát hiện người + 17 điểm khớp cơ thể (COCO keypoints)
+- ✂️ **Cắt thông minh**: Cắt chân dung đầu + nửa ngực dựa trên bề rộng vai, bao gồm cả tay giơ
+- 🧹 **Khử trùng theo Pose**: Loại bỏ bounding box trùng bằng khoảng cách đầu — người bị che vẫn được giữ
+- 🏃 **Tracking**: Bám theo từng người qua tất cả frame bằng greedy IoU matching
+- 🖱️ **Chỉnh tay**: Kéo cạnh/góc/di chuyển khung cắt trực tiếp trên ảnh (8 handle)
+- 📁 **Batch processing**: Xử lý nhiều folder video cùng lúc, áp ID mẫu cho tất cả
+- 💾 **Cache thông minh**: Nhớ trạng thái khi chuyển giữa các folder; lưu phiên làm việc ra đĩa
 
 ---
 
@@ -114,7 +115,7 @@ pip install numpy
 # 3. PyQt5 - Giao diện đồ họa
 pip install PyQt5
 
-# 4. Ultralytics - Framework YOLOv8 (tự cài kèm PyTorch)
+# 4. Ultralytics - Framework YOLO (tự cài kèm PyTorch)
 pip install ultralytics
 ```
 
@@ -141,11 +142,11 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 python -c "import cv2; import numpy; import PyQt5; from ultralytics import YOLO; print('✅ Tất cả thư viện OK!')"
 ```
 
-### Bước 4: Tải model YOLOv8
+### Bước 4: Tải model YOLO
 
-Dự án cần file model `yolov8m-pose.pt` (~53MB). Có 2 cách:
+Dự án cần file model pose. Có 2 cách:
 
-**Cách 1**: Model đã có sẵn trong thư mục dự án (nếu bạn clone/copy đầy đủ) → không cần làm gì thêm.
+**Cách 1**: Model đã có sẵn trong thư mục dự án (`yolo26m-pose.pt` hoặc `yolov8m-pose.pt`) → không cần làm gì thêm.
 
 **Cách 2**: Tự động tải lần đầu chạy — Ultralytics sẽ tự tải nếu không tìm thấy file.
 
@@ -163,6 +164,10 @@ cd "C:\Users\Admin\Desktop\new project\test1"
 python main.py
 ```
 
+**Hoặc dùng batch script:**
+- `start.bat` — Chạy ứng dụng không hiện terminal (dùng `pythonw`)
+- `restart.bat` — Tắt ứng dụng cũ và khởi động lại
+
 ---
 
 ## 📖 Hướng dẫn sử dụng
@@ -172,7 +177,7 @@ python main.py
 1. **Chọn folder**: Nhấn `📂 Chọn...` → chọn thư mục chứa các frame ảnh (trích từ video)
 2. **Phát hiện**: Nhấn `🔍 Tải & phát hiện` → app chạy YOLO, hiển thị khung cắt trên frame đầu
 3. **Chỉnh khung** (nếu cần): Kéo cạnh/góc/di chuyển khung trực tiếp trên ảnh
-4. **Gán ID**: Gõ số ID cho từng người ở cột bên phải (để trống = bỏ qua)
+4. **Gán ID**: Chọn ID từ dropdown hoặc gõ số cho từng người ở cột bên phải (để trống = bỏ qua)
 5. **Xuất**: Nhấn `🚀 Xử lý & xuất tất cả` → app xử lý toàn bộ frame
 
 ### Chế độ batch (nhiều folder)
@@ -182,6 +187,10 @@ python main.py
 3. Có 2 lựa chọn:
    - `🚀 Xử lý & folder tiếp →`: Xử lý từng folder, chỉnh ID riêng nếu cần
    - `🌐 Gán 1 lần → xuất TẤT CẢ folder`: Áp ID mẫu cho tất cả folder (nhanh, phù hợp khi camera cố định)
+
+### Chế độ xem frame khác
+
+Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị trí khác nhau trong clip (giữ nguyên khung cắt để so sánh).
 
 ### Kết quả đầu ra
 
@@ -205,13 +214,17 @@ python main.py
 test1/
 ├── main.py              # Điểm khởi chạy
 ├── config.py            # Cấu hình model + thông số cắt
-├── detection.py         # Logic phát hiện, cắt, tracking
+├── detection.py         # Logic phát hiện, khử trùng, cắt, tracking
 ├── gui.py               # Giao diện PyQt5
-├── yolov8m-pose.pt      # Model chính (YOLOv8 Medium Pose)
-├── yolov8m.pt           # Model dự phòng
-├── yolov8s.pt           # Model nhẹ hơn
-├── yolov8n.pt           # Model nhẹ nhất
-├── rulepic.png          # Ảnh hướng dẫn quy tắc gán ID
+├── app_state.json       # Lưu phiên làm việc (tự động)
+├── start.bat            # Chạy app không hiện terminal
+├── restart.bat          # Khởi động lại app
+├── yolo26m-pose.pt      # Model chính (YOLO Pose, mới nhất)
+├── yolov8m-pose.pt      # Model dự phòng (YOLOv8 Medium Pose)
+├── yolov8m.pt           # YOLOv8 Medium (detection thuần)
+├── yolov8s.pt           # YOLOv8 Small (nhẹ hơn)
+├── yolov8n.pt           # YOLOv8 Nano (nhẹ nhất)
+├── rule.png             # Ảnh hướng dẫn quy tắc gán ID
 ├── PROJECT_EXPLANATION.md   # Giải thích chi tiết dự án
 └── README.md            # File này
 ```
@@ -224,25 +237,32 @@ Mở file `config.py` để điều chỉnh:
 
 ### Đổi model
 ```python
-_MODEL_NAME = "yolov8m-pose.pt"   # Mặc định: Medium Pose
+_MODEL_NAME = "yolo26m-pose.pt"   # Mặc định: YOLO Pose mới nhất
 # Có thể đổi sang:
-# "yolov8s-pose.pt"  — nhẹ hơn, nhanh hơn, ít chính xác hơn
-# "yolov8l-pose.pt"  — nặng hơn, chính xác hơn
+# "yolov8m-pose.pt" — dự phòng
+# "yolov8s-pose.pt" — nhẹ hơn, nhanh hơn
 ```
 
 ### Điều chỉnh ngưỡng phát hiện
 ```python
-_CONF = 0.25      # Tăng lên (0.4-0.5) nếu bị phát hiện nhầm
-                   # Giảm xuống (0.15-0.2) nếu bỏ sót người
+_CONF = 0.25        # Tăng lên (0.4-0.5) nếu bị phát hiện nhầm
+                    # Giảm xuống (0.15-0.2) nếu bỏ sót người
 
-_NMS_IOU = 0.5    # Giảm nếu có quá nhiều khung trùng
+_NMS_IOU = 0.5      # Giảm nếu có quá nhiều khung trùng
+```
+
+### Khử trùng theo Pose
+```python
+_HEAD_DUP = 0.5     # 2 khung có đầu cách nhau < 0.5 × bề rộng vai → cùng người
 ```
 
 ### Điều chỉnh vùng cắt
 ```python
-_TORSO_FACTOR = 1.6   # Tăng lên → cắt xuống thấp hơn (lấy thêm ngực/bụng)
-_CROWN_FACTOR = 0.75  # Tăng lên → chừa nhiều không gian phía trên đầu
-_SIDE_MARGIN = 0.22   # Tăng lên → nới rộng hai bên
+_CROWN_FACTOR = 0.65   # Ước lượng đỉnh đầu (tránh cắt lẹm tóc)
+_FINGER_FACTOR = 0.60  # Nới vùng cắt khi tay giơ (lấy đủ ngón)
+_TORSO_FACTOR = 1.25   # Đáy cắt: dưới vai × hệ số (tới ngực)
+_SIDE_MARGIN = 0.20    # Nới hai bên khung cắt
+_MARGIN_PX = 7         # Padding pixel cố định
 ```
 
 ### Đổi thư mục mặc định
@@ -309,7 +329,9 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 - **Dữ liệu đầu vào**: Các frame ảnh trích từ video (khoảng 60 frame/clip), đặt trong 1 folder
 - **Chỉ xử lý frame đầu bằng YOLO**: Các frame sau dùng tracking (IoU) → nhanh hơn nhiều
+- **Khử trùng thông minh**: So sánh khoảng cách đầu — người bị che một phần vẫn được giữ
 - **Delta chỉnh tay**: Nếu bạn chỉnh khung ở frame đầu, phần chênh lệch sẽ được áp dụng cho tất cả frame sau
+- **Xem frame Đầu/Giữa/Cuối**: Giữ nguyên khung cắt để kiểm tra chất lượng tracking
 - **Cache**: Khi chuyển folder trong batch mode, trạng thái ID + khung được lưu lại, quay lại không mất
 
 ---
@@ -318,5 +340,4 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 Dự án sử dụng cho mục đích nghiên cứu và thực tập.
 
-Model YOLOv8 thuộc bản quyền [Ultralytics](https://github.com/ultralytics/ultralytics) — sử dụng theo giấy phép AGPL-3.0.
-# AUTO-CROP-theo-ID
+Model YOLO thuộc bản quyền [Ultralytics](https://github.com/ultralytics/ultralytics) — sử dụng theo giấy phép AGPL-3.0.
