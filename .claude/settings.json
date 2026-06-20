@@ -38,7 +38,21 @@
       "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/1781787584_1781787586_22/id_2/**)",
       "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/1781787584_1781787586_22/id_13/**)",
       "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/1781787584_1781787586_22/id_6/**)",
-      "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/1781787584_1781787586_22/id_3/**)"
+      "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/1781787584_1781787586_22/id_3/**)",
+      "Bash(python -c \"import onnxruntime; print\\('onnxruntime', onnxruntime.__version__\\)\")",
+      "Bash(python -c \"import torchreid; print\\('torchreid ok'\\)\")",
+      "Bash(python -c \"import torch; print\\('torch', torch.__version__, 'cuda', torch.cuda.is_available\\(\\)\\)\")",
+      "Bash(python -c \"import torchvision; print\\('torchvision', torchvision.__version__\\)\")",
+      "Bash(python -c \"from torchvision.models import resnet50, ResNet50_Weights; print\\('resnet weights api ok'\\)\")",
+      "Bash(cd \"c:/Users/Admin/Desktop/2025.2/thuctap/video/savevideo\" && rtk ls -d 1781787588* 2>/dev/null; rtk ls -d 178178758* 2>/dev/null | head)",
+      "Read(//c/Users/Admin/Desktop/2025.2/thuctap/video/savevideo/**)",
+      "Bash(python -u -c ' *)",
+      "Bash(grep -vE \"Downloading|^\\\\s*$|XNNPACK|Feedback|WARNING\")",
+      "Bash(python -m py_compile config.py detection.py)",
+      "Bash(rtk grep *)",
+      "Bash(python -m py_compile detection.py gui.py)",
+      "Bash(python -m py_compile detection.py)",
+      "Bash(python -m py_compile gui.py)"
     ]
   }
 }

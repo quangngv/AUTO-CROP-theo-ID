@@ -9,7 +9,7 @@ import os
 # ----- Model -----
 # Model POSE: cho ra điểm khớp cơ thể (đầu/vai/khuỷu/cổ tay/hông) -> cắt nửa thân
 # trên chính xác: gồm cả TAY GIƠ, bỏ CHÂN, không cắt vào mặt. (~50MB tải lần đầu)
-_MODEL_NAME = "yolov8m-pose.pt"
+_MODEL_NAME = "yolo26m-pose.pt"
 _MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), _MODEL_NAME)
 
 # ----- Ngưỡng phát hiện / khử trùng -----
@@ -18,9 +18,15 @@ _NMS_IOU = 0.5                        # NMS thấp -> bớt khung chồng (trùn
 _CONTAIN_THR = 0.85                   # khung nằm trong khung khác > tỉ lệ này...
 _DUP_AREA_RATIO = 0.75                # ...VÀ kích thước tương đương -> mới coi là trùng (bỏ).
                                       # Người bị che có khung nhỏ hơn nhiều -> được GIỮ lại.
+# Khử trùng theo POSE: 2 khung có ĐẦU cách nhau < _HEAD_DUP x bề rộng vai => cùng 1 người.
+# (đo thực tế: trùng ~0.01, hai người khác nhau ~0.9 -> 0.5 tách sạch)
+_HEAD_DUP = 0.5
 
 # ----- Tracking -----
 _TRACK_IOU = 0.3                      # ngưỡng IoU để coi là cùng một người giữa 2 frame
+
+# ----- Đánh số -----
+_NUM_ROWS = 3                         # số HÀNG ghế trong phòng (đánh số dưới->trên, trái->phải)
 
 # ----- Cắt theo điểm khớp (pose): chân dung ĐẦU + NỬA NGỰC -----
 # Mọi khoảng cách đo theo BỀ RỘNG VAI (S) - ổn định kể cả khi người CÚI/CHỒM xuống
@@ -28,11 +34,11 @@ _TRACK_IOU = 0.3                      # ngưỡng IoU để coi là cùng một 
 _KP_CONF = 0.30                       # ngưỡng tin cậy của từng điểm khớp
 # COCO không có điểm "đỉnh đầu" (chỉ mũi/mắt/tai) -> ước lượng đỉnh sọ phía trên
 # mắt/tai một khoảng _CROWN_FACTOR x S để KHÔNG lẹm vào tóc/đỉnh đầu.
-_CROWN_FACTOR = 0.75                  # đỉnh sọ ~ head_top - 0.75 x bề_rộng_vai
-_FINGER_FACTOR = 0.55                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
-_TORSO_FACTOR = 1.6                   # đáy crop = vai + 1.6 x S (tới ~ngực, không xuống mặt bàn)
-_SIDE_MARGIN = 0.22                   # nới hai bên (theo bề rộng vùng khớp)
-_MARGIN_PX = 8                        # nới thêm cố định (pixel)
+_CROWN_FACTOR = 0.65                  # đỉnh sọ ~ head_top - 0.75 x bề_rộng_vai
+_FINGER_FACTOR = 0.60                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
+_TORSO_FACTOR = 1.25                   # đáy crop = vai + 1.6 x S (tới ~ngực, không xuống mặt bàn)
+_SIDE_MARGIN = 0.20                   # nới hai bên (theo bề rộng vùng khớp)
+_MARGIN_PX = 7                        # nới thêm cố định (pixel)
 # Khi thiếu điểm khớp đầu/vai (bị che nặng) -> fallback: dùng khung bbox + nới _PAD
 _PAD = 0.12
 

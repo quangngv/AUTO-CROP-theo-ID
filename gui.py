@@ -2,6 +2,7 @@
 """Giao diện PyQt5 cho AUTO CROP theo ID."""
 
 import os
+import json
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import *
@@ -223,6 +224,8 @@ class MainWindow(QMainWindow):
             QPushButton#go { background:#28a745; }
             QPushButton#go:hover { background:#38b755; }
             QLineEdit { background:#2b2b2b; border:1px solid #555; border-radius:5px; padding:6px; color:#eee; }
+            QComboBox { background:#2b2b2b; border:1px solid #555; border-radius:5px; padding:3px 4px; color:#eee; }
+            QComboBox QAbstractItemView { background:#2b2b2b; color:#eee; selection-background-color:#3a6ea5; }
             QLabel#hdr { color:#fff; font-size:18px; font-weight:bold; }
             QGroupBox { border:1px solid #555; border-radius:8px; margin-top:8px; font-weight:bold; }
             QGroupBox::title { subcontrol-origin: margin; left:10px; padding:0 5px; }
@@ -231,8 +234,14 @@ class MainWindow(QMainWindow):
             QProgressBar::chunk { background:#28a745; border-radius:5px; }
         """)
 
-        central = QWidget(); self.setCentralWidget(central)
-        root = QVBoxLayout(central); root.setContentsMargins(16, 16, 16, 16); root.setSpacing(10)
+        self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(
+            "QTabBar::tab{background:#2b2b2b;color:#ccc;padding:8px 18px;margin-right:2px;}"
+            "QTabBar::tab:selected{background:#3a6ea5;color:#fff;}")
+        self.setCentralWidget(self.tabs)
+
+        work = QWidget()
+        root = QVBoxLayout(work); root.setContentsMargins(16, 16, 16, 16); root.setSpacing(10)
 
         hdr = QLabel("✂️ AUTO CROP theo ID — cắt từng người qua mọi frame")
         hdr.setObjectName("hdr"); root.addWidget(hdr)
@@ -284,11 +293,25 @@ class MainWindow(QMainWindow):
         main.addWidget(self.queue_group)
 
         # Ảnh + chỉnh khung — GIỮA, chiếm phần lớn không gian
-        left = QGroupBox("Frame đầu — kéo cạnh/góc để chỉnh khung, gõ id bên phải")
+        left = QGroupBox("Frame — kéo cạnh/góc để chỉnh khung, gõ id bên phải")
         ll = QVBoxLayout()
         self.view = FrameEditor(); ll.addWidget(self.view, 1)
+
+        # Chọn xem khung ở ĐẦU / GIỮA / CUỐI clip để so sánh (chỉ đổi ảnh nền, giữ khung)
+        pos_row = QHBoxLayout()
+        pos_row.addWidget(QLabel("📍 Xem khung:"))
+        self.pos_buttons = {}
+        for key, label in [("first", "Đầu"), ("mid", "Giữa"), ("last", "Cuối")]:
+            btn = QPushButton(label); btn.setCheckable(True); btn.setFixedWidth(70)
+            btn.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
+                              "QPushButton:checked{background:#3a6ea5;color:#fff;}")
+            btn.clicked.connect(lambda _=False, k=key: self._show_frame_pos(k))
+            self.pos_buttons[key] = btn; pos_row.addWidget(btn)
+        pos_row.addStretch()
+        ll.addLayout(pos_row)
+
         tip = QLabel("💡 Rê cạnh/góc để nới khung theo x, y; rê giữa để di chuyển. "
-                     "Chỉnh ở frame đầu sẽ áp cho cả 60 frame.")
+                     "Chỉnh ở frame đầu sẽ áp cho cả clip.")
         tip.setStyleSheet("color:#888; font-weight:normal;"); tip.setWordWrap(True)
         ll.addWidget(tip)
         self.btn_reset_box = QPushButton("↺ Khôi phục khung tự động")
@@ -324,9 +347,13 @@ class MainWindow(QMainWindow):
         main.setStretchFactor(1, 1)   # ảnh (giãn)
         main.setStretchFactor(2, 0)   # gán id
         main.setSizes([210, 1100, 270])
+        self.splitter = main
         root.addWidget(main, 1)
 
         self.progress = QProgressBar(); self.progress.setValue(0); root.addWidget(self.progress)
+
+        self.tabs.addTab(work, "✏️ Làm việc")
+        self._build_history_tab()
         self.statusBar().showMessage("Sẵn sàng — chọn thư mục chứa frame")
 
         # Trạng thái
@@ -339,8 +366,80 @@ class MainWindow(QMainWindow):
         self.queue = []           # danh sách folder khi xử lý nhiều folder
         self.qi = 0               # vị trí folder hiện tại trong hàng đợi
         self.done = set()         # chỉ số folder đã xuất xong (đánh dấu ✓)
-        self._cache = {}          # lưu id + khung đã chỉnh theo từng folder
+        self._cache = {}          # lưu id + khung đã chỉnh theo từng folder (trong phiên)
         self._current_folder = None
+        self._frame_pos = "first"   # đang xem frame đầu/giữa/cuối
+        self._saved_edits = {}      # {folder: {ids, boxes, done}} -> lưu ra đĩa
+
+        # Khôi phục cài đặt cửa sổ (kích thước / phóng to / vạch chia) từ lần trước
+        self._settings = QSettings("AutoCropID", "AutoCropID")
+        geo = self._settings.value("geometry")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        st = self._settings.value("splitter")
+        if st is not None:
+            self.splitter.restoreState(st)
+        self._want_max = self._settings.value("maximized", False, type=bool)
+        self._shown_once = False
+
+        # Khôi phục PHIÊN LÀM VIỆC (folder đang làm + chỉnh sửa) sau khi cửa sổ hiện
+        QTimer.singleShot(0, self._restore_session)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        if self._want_max and not self._shown_once:   # mở lại ở dạng phóng to như lần trước
+            self._shown_once = True
+            QTimer.singleShot(0, self.showMaximized)
+
+    def closeEvent(self, e):
+        # Lưu cài đặt cửa sổ để lần sau mở lại y như cũ
+        self._save_current_state()
+        self._save_state_to_disk()
+        self._settings.setValue("maximized", self.isMaximized())
+        if not self.isMaximized():
+            self._settings.setValue("geometry", self.saveGeometry())
+        self._settings.setValue("splitter", self.splitter.saveState())
+        super().closeEvent(e)
+
+    # ---- lưu/khôi phục phiên ra đĩa ----
+    def _state_path(self):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
+
+    def _save_state_to_disk(self):
+        data = {
+            "queue": self.queue,
+            "qi": self.qi,
+            "done": sorted(self.done),
+            "current_folder": self._current_folder,
+            "edits": self._saved_edits,
+        }
+        try:
+            with open(self._state_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _restore_session(self):
+        """Mở lại đúng folder đang làm trước khi tắt, kèm các chỉnh sửa đã lưu."""
+        try:
+            with open(self._state_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            return
+        self._saved_edits = {k: v for k, v in data.get("edits", {}).items() if os.path.isdir(k)}
+        self._refresh_history()
+        queue = [d for d in data.get("queue", []) if os.path.isdir(d)]
+        if queue:
+            self.queue = queue
+            self.done = set(i for i in data.get("done", []) if i < len(queue))
+            self.qi = min(data.get("qi", 0), len(queue) - 1)
+            self._build_queue_list()
+            self._load_queue_current()
+        else:
+            cur = data.get("current_folder")
+            if cur and os.path.isdir(cur):
+                self.path_edit.setText(cur)
+                self.load_and_detect()
 
     # ---- thao tác ----
     def browse_folder(self):
@@ -480,15 +579,22 @@ class MainWindow(QMainWindow):
             btn.setChecked(j == k)
 
     def _save_current_state(self):
-        """Lưu id + khung đã chỉnh của folder ĐANG mở để khi quay lại không mất."""
+        """Lưu id + khung đã chỉnh của folder ĐANG mở (trong phiên + ra đĩa)."""
         if self._current_folder and self.first_boxes:
+            boxes = self.view.get_boxes()
+            ids = [e.currentText() for e in self.id_inputs]
             self._cache[self._current_folder] = {
                 "first_boxes": self.first_boxes,
                 "first_kpts": self.first_kpts,
                 "auto_crops": self.auto_crops,
-                "boxes": self.view.get_boxes(),
-                "ids": [e.text() for e in self.id_inputs],
+                "boxes": boxes,
+                "ids": ids,
             }
+            # bản nhẹ để lưu ra đĩa (chỉ giữ id + khung; phát hiện sẽ chạy lại khi mở)
+            if any(s.strip() for s in ids):
+                self._saved_edits[self._current_folder] = {"ids": ids, "boxes": boxes}
+                self._refresh_history()
+            self._save_state_to_disk()
 
     def load_and_detect(self):
         folder = self.path_edit.text().strip().strip('"')
@@ -521,7 +627,7 @@ class MainWindow(QMainWindow):
                 boxes, kpts = detect(first)
             except Exception as e:
                 QMessageBox.critical(self, "Lỗi YOLO", str(e)); return
-            order = order_boxes(boxes)
+            order = order_boxes(boxes, kpts)
             self.first_boxes = [boxes[i] for i in order]
             self.first_kpts = [kpts[i] for i in order]
             h0, w0 = first.shape[:2]
@@ -529,6 +635,18 @@ class MainWindow(QMainWindow):
                                for i in range(len(self.first_boxes))]
             saved_boxes = [list(b) for b in self.auto_crops]
             saved_ids = ["" for _ in self.first_boxes]
+            # áp chỉnh sửa đã LƯU RA ĐĨA từ phiên trước (nếu có, khớp số khung)
+            disk = self._saved_edits.get(folder)
+            if disk:
+                db = disk.get("boxes", []); di = disk.get("ids", [])
+                if len(db) == len(self.first_boxes):
+                    saved_boxes = [list(x) for x in db]
+                if len(di) == len(self.first_boxes):
+                    saved_ids = list(di)
+
+        self._frame_pos = "first"
+        for key, btn in self.pos_buttons.items():
+            btn.setChecked(key == "first")
 
         labels = [str(i + 1) for i in range(len(self.first_boxes))]
         self.view.set_frame(first)
@@ -545,9 +663,11 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _=False, k=i: self._select_box(k))
             self.id_buttons.append(btn); row.addWidget(btn)
             row.addWidget(QLabel("→ id_"))
-            edit = QLineEdit(); edit.setPlaceholderText("trống = bỏ"); edit.setFixedWidth(90)
-            if i < len(saved_ids):
-                edit.setText(saved_ids[i])
+            edit = QComboBox(); edit.setEditable(True); edit.setFixedWidth(80)
+            edit.addItem("")                                   # trống = bỏ qua
+            edit.addItems([str(n) for n in range(1, 22)])      # 1..21 chọn sẵn
+            edit.lineEdit().setPlaceholderText("bỏ")
+            edit.setCurrentText(saved_ids[i] if i < len(saved_ids) else "")
             self.id_inputs.append(edit); row.addWidget(edit); row.addStretch()
             w = QWidget(); w.setLayout(row); self.form.addWidget(w)
         if self.id_buttons:
@@ -574,11 +694,62 @@ class MainWindow(QMainWindow):
             labels = [str(i + 1) for i in range(len(self.auto_crops))]
             self.view.set_boxes([list(b) for b in self.auto_crops], labels)
 
+    def _show_frame_pos(self, key):
+        """Đổi ảnh nền sang frame ĐẦU/GIỮA/CUỐI để so sánh (giữ nguyên khung)."""
+        if not self.frames:
+            return
+        self._frame_pos = key
+        for k, btn in self.pos_buttons.items():
+            btn.setChecked(k == key)
+        idx = {"first": 0, "mid": len(self.frames) // 2, "last": len(self.frames) - 1}[key]
+        img = cv2.imread(self.frames[idx])
+        if img is not None:
+            self.view.set_frame(img)      # set_frame KHÔNG đụng tới khung -> giữ nguyên để so sánh
+        self.statusBar().showMessage(
+            f"Đang xem frame {os.path.basename(self.frames[idx])} ({ {'first':'đầu','mid':'giữa','last':'cuối'}[key] })")
+
+    # ---- trang Lịch sử ----
+    def _build_history_tab(self):
+        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(16, 16, 16, 16)
+        lay.addWidget(QLabel("🕘 Các folder đã/đang sửa — bấm để mở lại:"))
+        self.history_list = QListWidget()
+        self.history_list.setStyleSheet(
+            "QListWidget{background:#262626;border:1px solid #555;border-radius:6px;font-size:13px;}"
+            "QListWidget::item{padding:8px;border-bottom:1px solid #333;}"
+            "QListWidget::item:selected{background:#3a6ea5;color:#fff;}")
+        self.history_list.itemClicked.connect(self._on_history_clicked)
+        lay.addWidget(self.history_list, 1)
+        self.tabs.addTab(w, "🕘 Lịch sử")
+
+    def _refresh_history(self):
+        if not hasattr(self, "history_list"):
+            return
+        self.history_list.clear()
+        for folder, e in self._saved_edits.items():
+            nid = sum(1 for s in e.get("ids", []) if s.strip())
+            item = QListWidgetItem(f"📁 {os.path.basename(folder)}   —   {nid} id đã gán")
+            item.setData(Qt.UserRole, folder)
+            item.setToolTip(folder)
+            self.history_list.addItem(item)
+
+    def _on_history_clicked(self, item):
+        folder = item.data(Qt.UserRole)
+        if not folder or not os.path.isdir(folder):
+            return
+        self._save_current_state()
+        if folder in self.queue:
+            self.qi = self.queue.index(folder)
+            self._load_queue_current()
+        else:
+            self.path_edit.setText(folder)
+            self.load_and_detect()
+        self.tabs.setCurrentIndex(0)      # quay về tab Làm việc
+
     def _collect_mapping(self):
         """track_id (1..K) -> id_str, chỉ lấy ô có nhập."""
         mapping = {}
         for i, edit in enumerate(self.id_inputs):
-            val = edit.text().strip()
+            val = edit.currentText().strip()
             if val:
                 mapping[i + 1] = val
         return mapping
@@ -598,6 +769,7 @@ class MainWindow(QMainWindow):
         for idv in set(mapping.values()):
             os.makedirs(os.path.join(folder, f"id_{idv}"), exist_ok=True)
         tracker = IoUTracker(first_boxes)
+        last = {}   # idv -> (x1,y1,x2,y2) khung lần gần nhất, để GIỮ KHUNG khi frame mất dấu
         for fi, fpath in enumerate(frames):
             img = cv2.imread(fpath)
             if img is not None:
@@ -609,6 +781,7 @@ class MainWindow(QMainWindow):
                 else:
                     dets, dkpts = detect(img)
                     matches = tracker.update(dets)
+                done = set()
                 for di, tid in matches.items():
                     idv = mapping.get(tid)
                     if idv is None:
@@ -625,6 +798,16 @@ class MainWindow(QMainWindow):
                     if crop.size:
                         cv2.imwrite(os.path.join(folder, f"id_{idv}", fname), crop)
                         counts[idv] += 1
+                        last[idv] = (x1, y1, x2, y2)
+                        done.add(idv)
+                # ĐỦ 60 ẢNH: id nào mất dấu ở frame này -> cắt theo khung lần gần nhất
+                for idv in set(mapping.values()):
+                    if idv not in done and idv in last:
+                        x1, y1, x2, y2 = last[idv]
+                        crop = img[y1:y2, x1:x2]
+                        if crop.size:
+                            cv2.imwrite(os.path.join(folder, f"id_{idv}", fname), crop)
+                            counts[idv] += 1
             if on_frame:
                 on_frame(fi, len(frames))
         return counts
@@ -696,56 +879,88 @@ class MainWindow(QMainWindow):
             return
         ref_ids = {}                       # ref_idx (0-based) -> id
         for i, edit in enumerate(self.id_inputs):
-            v = edit.text().strip()
+            v = edit.currentText().strip()
             if v:
                 ref_ids[i] = v
         if not ref_ids:
             QMessageBox.warning(self, "Chưa gán id",
                 "Hãy gán id cho folder hiện tại để làm MẪU áp cho tất cả."); return
 
-        if QMessageBox.question(
-                self, "Gán cho tất cả",
-                f"Dùng id của folder hiện tại làm mẫu, khớp theo vị trí và xuất cho "
-                f"{len(self.queue)} folder?\n\n(Người đổi chỗ nhiều có thể bị gán nhầm — "
-                f"kiểm lại folder đó sau nếu cần.)") != QMessageBox.Yes:
+        # Chọn CỤ THỂ folder áp theo số thứ tự (vd: 1-8  hoặc  8,9  hoặc  1,3,5-7)
+        cur_no = self.qi + 1
+        text, ok = QInputDialog.getText(
+            self, "Áp cho folder nào",
+            f"Nhập số thứ tự folder cần áp (1–{len(self.queue)}).\n"
+            f"VD: 1-8  hoặc  8,9  hoặc  1,3,5-7. Để trống = tất cả.\n"
+            f"(Mẫu lấy từ folder hiện tại #{cur_no})",
+            text=f"1-{len(self.queue)}")
+        if not ok:
             return
+        targets = self._parse_ranges(text, len(self.queue))
+        if not targets:
+            QMessageBox.warning(self, "Lỗi", "Phạm vi không hợp lệ."); return
 
         ref_boxes = [list(b) for b in self.first_boxes]
         ref_deltas = self._current_deltas()        # key seed id = ref_idx + 1
         self.btn_export.setEnabled(False); self.btn_batch.setEnabled(False)
-        self.progress.setMaximum(len(self.queue)); self.progress.setValue(0)
+        self.progress.setMaximum(len(targets)); self.progress.setValue(0)
 
         grand = {}
-        for k, folder in enumerate(self.queue):
-            self.statusBar().showMessage(f"[{k + 1}/{len(self.queue)}] {os.path.basename(folder)}...")
+        for step, k in enumerate(targets):
+            folder = self.queue[k]
+            self.statusBar().showMessage(f"[{step + 1}/{len(targets)}] #{k + 1} {os.path.basename(folder)}...")
             QApplication.processEvents()
             frames = list_frames(folder)
-            if not frames:
-                self.progress.setValue(k + 1); continue
-            first = cv2.imread(frames[0])
-            if first is None:
-                self.progress.setValue(k + 1); continue
-            nb, nk = detect(first)
-            order = order_boxes(nb)
-            nb = [nb[i] for i in order]; nk = [nk[i] for i in order]
-            match = self._match_boxes(nb, ref_boxes)     # new_idx -> ref_idx
-            mapping, deltas = {}, {}
-            for ni, ri in match.items():
-                if ri in ref_ids:
-                    mapping[ni + 1] = ref_ids[ri]
-                    deltas[ni + 1] = ref_deltas.get(ri + 1, (0, 0, 0, 0))
-            if mapping:
-                counts = self._export_folder(folder, frames, nb, nk, mapping, deltas)
-                for idv, c in counts.items():
-                    grand[idv] = grand.get(idv, 0) + c
-                self.done.add(k)
-            self.progress.setValue(k + 1)
+            if frames:
+                first = cv2.imread(frames[0])
+                if first is not None:
+                    nb, nk = detect(first)
+                    order = order_boxes(nb, nk)
+                    nb = [nb[i] for i in order]; nk = [nk[i] for i in order]
+                    match = self._match_boxes(nb, ref_boxes)     # new_idx -> ref_idx
+                    mapping, deltas = {}, {}
+                    for ni, ri in match.items():
+                        if ri in ref_ids:
+                            mapping[ni + 1] = ref_ids[ri]
+                            deltas[ni + 1] = ref_deltas.get(ri + 1, (0, 0, 0, 0))
+                    if mapping:
+                        counts = self._export_folder(folder, frames, nb, nk, mapping, deltas)
+                        for idv, c in counts.items():
+                            grand[idv] = grand.get(idv, 0) + c
+                        self.done.add(k)
+            self.progress.setValue(step + 1)
             self._refresh_queue_marks()
             QApplication.processEvents()
 
         self.btn_export.setEnabled(True); self.btn_batch.setEnabled(True)
         summary = "\n".join(f"  id_{k}: {v} ảnh" for k, v in sorted(grand.items()))
-        QMessageBox.information(self, "Hoàn tất tất cả",
-            f"Đã áp id mẫu cho {len(self.queue)} folder.\n\nTổng ảnh mỗi id:\n{summary}")
+        QMessageBox.information(self, "Hoàn tất",
+            f"Đã áp id mẫu cho {len(targets)} folder.\n\nTổng ảnh mỗi id:\n{summary}")
         self.statusBar().showMessage(
-            f"Hoàn tất {len(self.queue)} folder — tổng {sum(grand.values())} ảnh.")
+            f"Hoàn tất {len(targets)} folder — tổng {sum(grand.values())} ảnh.")
+
+    @staticmethod
+    def _parse_ranges(text, maxn):
+        """Chuỗi '1-8, 10, 12-13' -> danh sách chỉ số 0-based (đã lọc trong 1..maxn). Trống = tất cả."""
+        text = (text or "").strip()
+        if not text:
+            return list(range(maxn))
+        out = set()
+        for tok in text.replace(" ", "").split(","):
+            if not tok:
+                continue
+            if "-" in tok:
+                try:
+                    a, b = tok.split("-", 1); a, b = int(a), int(b)
+                except ValueError:
+                    continue
+                if a > b:
+                    a, b = b, a
+                for v in range(a, b + 1):
+                    if 1 <= v <= maxn:
+                        out.add(v - 1)
+            elif tok.isdigit():
+                v = int(tok)
+                if 1 <= v <= maxn:
+                    out.add(v - 1)
+        return sorted(out)

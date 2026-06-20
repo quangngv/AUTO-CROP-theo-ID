@@ -7,10 +7,11 @@ Phát hiện người, khử trùng, cắt khung, tracking và liệt kê file.
 import os
 import re
 import glob
+import math
 import cv2
 
 from config import (
-    get_model, _CONF, _NMS_IOU, _CONTAIN_THR, _DUP_AREA_RATIO, _TRACK_IOU,
+    get_model, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS,
     _KP_CONF, _CROWN_FACTOR, _FINGER_FACTOR, _TORSO_FACTOR,
     _SIDE_MARGIN, _MARGIN_PX, _PAD, _IMG_EXTS,
 )
@@ -65,21 +66,91 @@ def detect(image):
     def area(x):
         return (x[2] - x[0]) * (x[3] - x[1])
 
-    # Khung lớn xét trước; bỏ khung nằm gần trọn trong khung đã giữ VÀ cỡ tương đương (trùng người)
+    # Khử trùng theo POSE: cùng VỊ TRÍ ĐẦU = cùng người (bỏ); đầu cách xa = người khác (giữ).
+    # Khung lớn xét trước để giữ khung to, bỏ khung nhỏ trùng.
     order = sorted(range(len(boxes)), key=lambda i: area(boxes[i]), reverse=True)
     keep_b, keep_k = [], []
     for i in order:
-        b = boxes[i]
-        dup = any(_contain_ratio(b, k) > _CONTAIN_THR and area(b) / area(k) > _DUP_AREA_RATIO
-                  for k in keep_b)
+        b, kb = boxes[i], kpts[i]
+        hb = _head_point(kb, b)
+        sb = _person_scale(kb, b)
+        dup = False
+        for k, kk in zip(keep_b, keep_k):
+            hk = _head_point(kk, k)
+            sc = min(sb, _person_scale(kk, k))
+            if math.hypot(hb[0] - hk[0], hb[1] - hk[1]) < _HEAD_DUP * sc:
+                dup = True; break
+            if _iou(b, k) > 0.7:          # dự phòng khi thiếu điểm khớp
+                dup = True; break
         if not dup:
-            keep_b.append(b); keep_k.append(kpts[i])
+            keep_b.append(b); keep_k.append(kb)
     return keep_b, keep_k
 
-def order_boxes(boxes):
-    """Sắp xếp trái->phải, trên->xuống để đánh số tạm cho trực quan."""
-    return sorted(range(len(boxes)),
-                  key=lambda i: (int(boxes[i][1]) // 100, boxes[i][0]))
+def _head_point(kpts, box):
+    """Vị trí ĐẦU: trung bình các điểm mũi/mắt/tai; thiếu thì lấy đỉnh giữa khung."""
+    if kpts is not None:
+        pts = [(kpts[j][0], kpts[j][1]) for j in (0, 1, 2, 3, 4) if kpts[j][2] > _KP_CONF]
+        if pts:
+            return (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))
+    return ((box[0] + box[2]) / 2, box[1])
+
+def _person_scale(kpts, box):
+    """Thước đo cỡ người = bề rộng vai; thiếu thì lấy nửa bề rộng khung."""
+    if kpts is not None and kpts[5][2] > _KP_CONF and kpts[6][2] > _KP_CONF:
+        w = abs(kpts[5][0] - kpts[6][0])
+        if w > 1:
+            return w
+    return max((box[2] - box[0]) * 0.5, 20.0)
+
+def order_boxes(boxes, kpts=None):
+    """
+    Đánh số ổn định theo HÀNG (xác định bằng vị trí ĐẦU):
+    gom người thành các hàng theo khoảng trống dọc, hàng DƯỚI CÙNG trước rồi lên trên,
+    mỗi hàng từ TRÁI sang PHẢI -> #1 ở dưới-trái, tăng dần tới trên-phải.
+    Dùng đầu (không dùng đỉnh khung) nên người giơ tay không làm số nhảy loạn.
+    """
+    n = len(boxes)
+    if n == 0:
+        return []
+    heads = [_head_point(kpts[i] if kpts else None, boxes[i]) for i in range(n)]
+
+    # Chia thành đúng _NUM_ROWS hàng bằng phân cụm 1D theo đầu-y (tối ưu: các đoạn
+    # liên tục gọn nhất). Ổn định hơn "cắt khoảng trống lớn nhất" trước perspective.
+    by_y = sorted(range(n), key=lambda i: heads[i][1])     # trên -> dưới
+    ys = [heads[i][1] for i in by_y]
+    bounds = _segment_1d(ys, max(1, min(_NUM_ROWS, n)))
+    rows = [by_y[bounds[t]:bounds[t + 1]] for t in range(len(bounds) - 1)]
+
+    # hàng DƯỚI CÙNG trước; trong mỗi hàng TRÁI -> PHẢI theo x
+    out = []
+    for row in reversed(rows):
+        out.extend(sorted(row, key=lambda i: heads[i][0]))
+    return out
+
+def _segment_1d(vals_sorted, k):
+    """Chia mảng đã sắp thành k đoạn liên tục, tổng phương sai nhỏ nhất. Trả về ranh giới."""
+    import itertools
+    n = len(vals_sorted)
+    k = max(1, min(k, n))
+    pre = [0.0] * (n + 1); pre2 = [0.0] * (n + 1)
+    for i, v in enumerate(vals_sorted):
+        pre[i + 1] = pre[i] + v
+        pre2[i + 1] = pre2[i] + v * v
+
+    def cost(a, b):                       # phương sai*size của đoạn [a,b)
+        m = b - a
+        if m <= 1:
+            return 0.0
+        s = pre[b] - pre[a]
+        return (pre2[b] - pre2[a]) - s * s / m
+
+    best = None
+    for cuts in itertools.combinations(range(1, n), k - 1):
+        idx = (0,) + cuts + (n,)
+        c = sum(cost(idx[t], idx[t + 1]) for t in range(k))
+        if best is None or c < best[0]:
+            best = (c, idx)
+    return list(best[1])
 
 def _bbox_fallback(box, w, h):
     x1, y1, x2, y2 = box
