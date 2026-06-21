@@ -33,9 +33,10 @@
 - 🧹 **Khử trùng theo Pose**: Loại bỏ bounding box trùng bằng khoảng cách đầu — người bị che vẫn được giữ
 - 🏃 **Tracking**: Bám theo từng người qua tất cả frame bằng greedy IoU matching
 - 🖱️ **Chỉnh tay**: Kéo cạnh/góc/di chuyển khung cắt trực tiếp trên ảnh (8 handle)
-- 🧠 **Gợi ý ID tự động**: So khớp ngoại hình (ResNet50 + màu áo) với bộ nhớ ID đã lưu
+- 🧠 **Gợi ý ID tự động**: So khớp ngoại hình (ResNet50 + màu áo) với bộ nhớ ID đã lưu — ô gợi ý **tô nền xanh** (chắc chắn) / **vàng** (nên kiểm tra)
 - 📁 **Batch processing**: Xử lý nhiều folder video cùng lúc, áp ID mẫu cho tất cả
-- 💾 **Cache thông minh**: Nhớ trạng thái khi chuyển giữa các folder; lưu phiên làm việc ra đĩa
+- 💾 **Cache thông minh**: Nhớ trạng thái (kể cả màu gợi ý) khi chuyển giữa các folder; lưu phiên làm việc ra đĩa
+- ⚡ **Khởi động mượt**: Model được **làm nóng ở luồng nền** ngay khi mở app — giao diện không bị đơ, lần nạp ảnh đầu nhanh hơn nhiều
 
 ---
 
@@ -159,7 +160,7 @@ python main.py
 
 1. **Chọn folder**: Nhấn `📂 Chọn...` → chọn thư mục chứa các frame ảnh (trích từ video)
 2. **Phát hiện**: Nhấn `🔍 Tải & phát hiện` → app chạy YOLO, hiển thị khung cắt trên frame đầu
-3. **Gợi ý ID**: Nếu đã có bộ nhớ ID, app tự gợi ý — viền **xanh** = chắc chắn, viền **vàng** = nên kiểm tra lại
+3. **Gợi ý ID**: Nếu đã có bộ nhớ ID, app tự gợi ý — ô tô nền **xanh** = chắc chắn, nền **vàng** = nên kiểm tra lại (sửa tay ô nào thì màu ô đó tự mất)
 4. **Chỉnh khung** (nếu cần): Kéo cạnh/góc/di chuyển khung trực tiếp trên ảnh
 5. **Gán ID**: Chọn ID từ dropdown hoặc gõ số cho từng người ở cột bên phải (để trống = bỏ qua)
 6. **Xuất**: Nhấn `🚀 Xử lý & xuất tất cả` → app xử lý toàn bộ frame
@@ -204,9 +205,10 @@ Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị tr
 ### Cách hoạt động
 
 - Khi mở folder mới, app tự động so khớp ngoại hình từng người với bộ nhớ đã lưu
-- **Viền xanh** (`s ≥ 0.62`): ID chắc chắn — có thể tin tưởng
-- **Viền vàng** (`0.45 ≤ s < 0.62`): ID nghi ngờ — nên kiểm tra lại
-- **Không viền** (`s < 0.45`): ID không tự động — cần gán tay
+- **Nền xanh** (`s ≥ 0.62`): ID chắc chắn — có thể tin tưởng
+- **Nền vàng** (`0.45 ≤ s < 0.62`): ID nghi ngờ — nên kiểm tra lại
+- **Không tô màu** (`s < 0.45`): ID không tự động — cần gán tay
+- Khi bạn **sửa tay** một ô, màu gợi ý ô đó tự mất (về mặc định). Màu được **nhớ theo từng folder** trong phiên — chuyển qua lại giữa các folder không bị mất màu
 
 ---
 
@@ -303,7 +305,8 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 - **Chỉ xử lý frame đầu bằng YOLO**: Các frame sau dùng tracking (IoU) → nhanh hơn nhiều
 - **Gợi ý ID**: Cần tạo bộ nhớ ID trước bằng nút `🧠 Bộ nhớ id`
 - **Delta chỉnh tay**: Nếu bạn chỉnh khung ở frame đầu, phần chênh lệch sẽ được áp dụng cho tất cả frame sau
-- **Cache**: Khi chuyển folder trong batch mode, trạng thái ID + khung được lưu lại, quay lại không mất
+- **Cache**: Khi chuyển folder trong batch mode, trạng thái ID + khung + màu gợi ý được lưu lại, quay lại không mất
+- **Làm nóng model**: Ngay khi mở app, YOLO và ResNet được nạp + chạy thử ở luồng nền (daemon). Nhờ vậy giao diện hiện ra ngay, lần phát hiện đầu không phải chờ import nặng (~6–10s). Mọi lời gọi YOLO đi qua `config.predict()` có khoá để an toàn khi chạy song song với việc làm nóng
 
 ---
 

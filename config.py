@@ -5,6 +5,7 @@ Cấu hình + nạp model YOLO.
 """
 
 import os
+import threading
 
 # ----- Model -----
 # Model POSE: cho ra điểm khớp cơ thể (đầu/vai/khuỷu/cổ tay/hông) -> cắt nửa thân
@@ -51,11 +52,28 @@ _IMG_EXTS = ('.png', '.jpg', '.jpeg', '.bmp', '.tiff')
 _DEFAULT_DIR = r"C:\Users\Admin\Desktop\2025.2\thuctap\video\savevideo"
 
 _yolo_model = None
+_model_lock = threading.Lock()
+_infer_lock = threading.Lock()
 
 def get_model():
-    """Tải/khởi tạo model YOLO một lần và tái sử dụng."""
+    """Tải/khởi tạo model YOLO một lần và tái sử dụng (an toàn đa luồng)."""
     global _yolo_model
     if _yolo_model is None:
-        from ultralytics import YOLO
-        _yolo_model = YOLO(_MODEL_PATH if os.path.exists(_MODEL_PATH) else _MODEL_NAME)
+        with _model_lock:                      # khoá: tránh 2 luồng cùng nạp model 2 lần
+            if _yolo_model is None:
+                from ultralytics import YOLO
+                _yolo_model = YOLO(_MODEL_PATH if os.path.exists(_MODEL_PATH) else _MODEL_NAME)
     return _yolo_model
+
+def predict(image, **kwargs):
+    """Chạy YOLO có KHOÁ tuần tự: ultralytics dùng chung 1 predictor nội bộ nên 2 lời
+    gọi song song (warmup nền + detect GUI) có thể hỏng. Khoá -> an toàn, gần như 0 chi phí."""
+    model = get_model()
+    with _infer_lock:
+        return model(image, **kwargs)
+
+def warmup():
+    """Nạp model + chạy 1 lần inference giả để 'làm nóng' (import nặng + cấp phát GPU).
+    Gọi ở luồng nền lúc mở app -> khi nạp ảnh thật chỉ còn ~0.02s thay vì ~6s."""
+    import numpy as np
+    predict(np.zeros((64, 64, 3), dtype=np.uint8), conf=_CONF, iou=_NMS_IOU, verbose=False)

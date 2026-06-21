@@ -11,7 +11,7 @@ import math
 import cv2
 
 from config import (
-    get_model, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS, _DROP_EDGE_PX,
+    predict, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS, _DROP_EDGE_PX,
     _KP_CONF, _CROWN_FACTOR, _FINGER_FACTOR, _TORSO_FACTOR,
     _SIDE_MARGIN, _MARGIN_PX, _PAD, _IMG_EXTS,
 )
@@ -51,8 +51,7 @@ def detect(image):
       - boxes[i] = [x1,y1,x2,y2] khung người
       - kpts[i]  = mảng (17,3) [x,y,conf] điểm khớp (hoặc None nếu không có)
     """
-    model = get_model()
-    results = model(image, conf=_CONF, iou=_NMS_IOU, verbose=False)[0]
+    results = predict(image, conf=_CONF, iou=_NMS_IOU, verbose=False)[0]
     if results.boxes is None or len(results.boxes) == 0:
         return [], []
 

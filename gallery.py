@@ -6,11 +6,13 @@ ResNet50 (ImageNet) rồi so khớp cosine. Dùng để GỢI Ý id bán tự đ
 
 import os
 import json
+import threading
 import numpy as np
 import cv2
 
 _model = None
 _dev = None
+_model_lock = threading.Lock()
 _GALLERY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gallery.json")
 _IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -19,15 +21,22 @@ _IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 def _get_model():
     global _model, _dev
     if _model is None:
-        import torch
-        from torchvision.models import resnet50, ResNet50_Weights
-        m = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
-        m.fc = torch.nn.Identity()      # lấy vector đặc trưng 2048-d
-        m.eval()
-        _dev = "cuda" if torch.cuda.is_available() else "cpu"
-        m.to(_dev)
-        _model = m
+        with _model_lock:                   # khoá: tránh 2 luồng cùng nạp ResNet 2 lần
+            if _model is None:
+                import torch
+                from torchvision.models import resnet50, ResNet50_Weights
+                m = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+                m.fc = torch.nn.Identity()      # lấy vector đặc trưng 2048-d
+                m.eval()
+                _dev = "cuda" if torch.cuda.is_available() else "cpu"
+                m.to(_dev)
+                _model = m
     return _model, _dev
+
+
+def warmup():
+    """Nạp ResNet + 1 embed giả để 'làm nóng' ở luồng nền (import torch + cấp phát GPU)."""
+    embed(np.zeros((64, 64, 3), dtype=np.uint8))
 
 
 # Trọng số kết hợp: đặc trưng CNN (dáng/kết cấu) + màu ÁO (bất biến tỉ lệ, mạnh cùng buổi)

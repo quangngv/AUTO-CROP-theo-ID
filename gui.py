@@ -4,6 +4,7 @@
 import os
 import json
 import math
+import threading
 import cv2
 import numpy as np
 from PyQt5.QtWidgets import *
@@ -452,6 +453,7 @@ class MainWindow(QMainWindow):
         self._saved_edits = {}      # {folder: {ids, boxes, done}} -> lưu ra đĩa
         self._gallery = gallery.load_gallery()   # bộ nhớ id theo ngoại hình
         self._gallery_img = None
+        self._suggest_colors = []   # màu gợi ý từng ô id (None nếu không gợi ý/đã sửa tay)
 
         # Khôi phục cài đặt cửa sổ (kích thước / phóng to / vạch chia) từ lần trước
         self._settings = QSettings("AutoCropID", "AutoCropID")
@@ -464,8 +466,26 @@ class MainWindow(QMainWindow):
         self._want_max = self._settings.value("maximized", False, type=bool)
         self._shown_once = False
 
+        # Làm NÓNG model ở luồng nền NGAY khi mở app (import nặng + cấp phát GPU ~6-10s).
+        # Nhờ vậy lần nạp ảnh đầu chỉ còn ~0.02s thay vì đơ máy ~6s. Daemon -> tự thoát theo app.
+        self._warm_thread = threading.Thread(target=self._warmup_models, daemon=True)
+        self._warm_thread.start()
+
         # Khôi phục PHIÊN LÀM VIỆC (folder đang làm + chỉnh sửa) sau khi cửa sổ hiện
         QTimer.singleShot(0, self._restore_session)
+
+    @staticmethod
+    def _warmup_models():
+        """Chạy ở luồng nền: nạp+làm nóng YOLO và ResNet. Lỗi (thiếu GPU/model) -> bỏ qua êm."""
+        import config
+        try:
+            config.warmup()
+        except Exception:
+            pass
+        try:
+            gallery.warmup()
+        except Exception:
+            pass
 
     def showEvent(self, e):
         super().showEvent(e)
@@ -671,6 +691,7 @@ class MainWindow(QMainWindow):
                 "auto_crops": self.auto_crops,
                 "boxes": boxes,
                 "ids": ids,
+                "colors": list(self._suggest_colors),   # giữ màu gợi ý khi quay lại folder
             }
             # bản nhẹ để lưu ra đĩa (chỉ giữ id + khung; phát hiện sẽ chạy lại khi mở)
             if any(s.strip() for s in ids):
@@ -696,12 +717,14 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Lỗi", "Không đọc được frame đầu."); return
 
         cached = self._cache.get(folder)
+        suggest_colors = None
         if cached:                                   # KHÔI PHỤC trạng thái đã lưu
             self.first_boxes = cached["first_boxes"]
             self.first_kpts = cached["first_kpts"]
             self.auto_crops = cached["auto_crops"]
             saved_boxes = cached["boxes"]
             saved_ids = cached["ids"]
+            suggest_colors = cached.get("colors")    # khôi phục màu gợi ý đã lưu
         else:                                        # PHÁT HIỆN mới
             self.statusBar().showMessage("Đang phát hiện người ở frame đầu...")
             QApplication.processEvents()
@@ -726,9 +749,8 @@ class MainWindow(QMainWindow):
                 if len(di) == len(self.first_boxes):
                     saved_ids = list(di)
 
-        # Gợi ý id tự động theo NGOẠI HÌNH (nếu đã có bộ nhớ id và folder chưa gán)
-        suggest_colors = None
-        if self._gallery and not any(s.strip() for s in saved_ids):
+        # Gợi ý id tự động theo NGOẠI HÌNH (chỉ chạy LẦN ĐẦU: chưa có màu cache, chưa gán id)
+        if suggest_colors is None and self._gallery and not any(s.strip() for s in saved_ids):
             saved_ids, suggest_colors = self._suggest_ids(first, saved_boxes)
 
         self._populate_ui(first, saved_boxes, saved_ids, suggest_colors)
@@ -758,6 +780,10 @@ class MainWindow(QMainWindow):
         self.view.set_boxes(saved_boxes, labels)
         self.view.on_select = self._highlight_row
 
+        # đồng bộ danh sách màu gợi ý hiện hành (dùng để LƯU cache + áp lại khi quay lại)
+        n = len(self.first_boxes)
+        self._suggest_colors = (list(suggest_colors) + [None] * n)[:n] if suggest_colors else [None] * n
+
         self._clear_form()
         for i in range(len(self.first_boxes)):
             row = QHBoxLayout()
@@ -769,8 +795,12 @@ class MainWindow(QMainWindow):
             row.addWidget(QLabel("→ id_"))
             edit = self._make_id_combo()
             edit.setCurrentText(saved_ids[i] if i < len(saved_ids) else "")
-            if suggest_colors and i < len(suggest_colors) and suggest_colors[i]:
-                edit.setStyleSheet(f"QComboBox{{border:2px solid {suggest_colors[i]};}}")
+            if self._suggest_colors[i]:
+                edit.setStyleSheet(self._suggest_style(self._suggest_colors[i]))
+                # khi người dùng tự sửa -> bỏ tô màu gợi ý (UI + cache) về mặc định
+                edit.editTextChanged.connect(
+                    lambda _t, e=edit, k=i: (e.setStyleSheet(""),
+                                             self._suggest_colors.__setitem__(k, None)))
             self.id_inputs.append(edit); row.addWidget(edit); row.addStretch()
             w = QWidget(); w.setLayout(row); self.form.addWidget(w)
         if self.id_buttons:
@@ -925,6 +955,16 @@ class MainWindow(QMainWindow):
             self.path_edit.setText(folder)
             self.load_and_detect()
         self.tabs.setCurrentIndex(0)      # quay về tab Làm việc
+
+    @staticmethod
+    def _suggest_style(color):
+        """Stylesheet TÔ NỀN cho ô gợi ý id: nền đậm + chữ đen -> nổi rõ trên nền tối.
+        Tô cả ô (không chỉ viền) nên không bị khung con của QComboBox vẽ đè."""
+        return (f"QComboBox{{background:{color}; color:#000; font-weight:bold;"
+                f" border:1px solid #000; border-radius:5px; padding:3px 4px;}}"
+                f"QComboBox:editable{{background:{color};}}"
+                f"QComboBox QLineEdit{{background:{color}; color:#000;}}"
+                f"QComboBox QAbstractItemView{{background:#2b2b2b; color:#eee;}}")
 
     def _make_id_combo(self):
         """Ô chọn id 1..21 (vẫn gõ tay được)."""

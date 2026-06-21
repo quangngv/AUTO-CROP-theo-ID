@@ -71,7 +71,11 @@ sys.exit(app.exec_())
 | | `_MARGIN_PX` | 7 | Padding cố định (px) |
 | | `_PAD` | 0.12 | Padding fallback khi thiếu keypoints |
 
-**`get_model()`**: Singleton — tải model YOLO một lần, tái sử dụng.
+**`get_model()`**: Singleton (có khoá double-check, an toàn đa luồng) — tải model YOLO một lần, tái sử dụng.
+
+**`predict(image, **kw)`**: Lời gọi YOLO **có khoá** (`_infer_lock`). Ultralytics dùng chung một predictor nội bộ nên không được chạy song song (luồng nền làm nóng vs luồng GUI phát hiện). Mọi nơi gọi YOLO đều đi qua hàm này.
+
+**`warmup()`**: Nạp model + chạy 1 inference giả để "làm nóng" (import nặng + cấp phát GPU). Được gọi ở **luồng nền** lúc mở app để giao diện không bị đơ. `gallery.warmup()` làm tương tự cho ResNet50.
 
 ### 3. `detection.py` — Lõi xử lý ảnh
 
@@ -82,7 +86,7 @@ Output: (boxes, kpts) — đã khử trùng
 ```
 
 Quy trình:
-1. Chạy YOLO Pose → boxes + 17 keypoints
+1. Chạy YOLO Pose (qua `config.predict`, có khoá) → boxes + 17 keypoints
 2. **Khử trùng theo Pose**: Sắp xếp khung lớn→nhỏ, so sánh **khoảng cách đầu** (mũi/mắt/tai) chuẩn hóa theo bề rộng vai. Nếu khoảng cách < `_HEAD_DUP × scale` → cùng người → bỏ khung nhỏ. Dự phòng: IoU > 0.7
 3. **Bỏ rìa trái**: Nếu `_DROP_EDGE_PX > 0`, loại người có `x1 ≤ _DROP_EDGE_PX` (thường là người qua đường, bị cắt nửa người)
 
@@ -119,7 +123,7 @@ Greedy IoU matching: frame đầu → seed IDs, mỗi frame sau tính IoU giữa
 |------|----------|
 | **Trái** | Thumbnail các folder batch, ✓/▶ đánh dấu, chuột phải xóa, phím Delete |
 | **Giữa** | FrameEditor + nút Đầu/Giữa/Cuối + Khôi phục khung |
-| **Phải** | Form gán ID (QComboBox 1–21), nút Khung#, gợi ý màu viền |
+| **Phải** | Form gán ID (QComboBox 1–21), nút Khung#, ô gợi ý tô nền xanh/vàng |
 
 **Các nút chức năng:**
 - `🧠 Bộ nhớ id` — Mở ảnh quy tắc → detect → gán ID → lưu gallery
@@ -132,7 +136,15 @@ Greedy IoU matching: frame đầu → seed IDs, mỗi frame sau tính IoU giữa
 **Gợi ý ID tự động** (`_suggest_ids`):
 - Trích đặc trưng từng khung cắt → cosine similarity với gallery
 - Ghép 1-1 (mỗi ID chỉ gán 1 người)
-- Viền xanh (`s ≥ 0.62`) / vàng (`0.45 ≤ s < 0.62`) / không viền
+- Tô **nền** ô id: xanh (`s ≥ 0.62`) / vàng (`0.45 ≤ s < 0.62`) / không tô (`s < 0.45`).
+  Tô nền cả ô (qua `_suggest_style`) thay vì chỉ viền, vì QComboBox có stylesheet toàn cục
+  sẽ che viền mảnh. Sửa tay ô nào → `editTextChanged` xoá màu ô đó.
+- **Màu được nhớ theo folder**: lưu trong `self._cache[folder]["colors"]` + khôi phục khi
+  quay lại folder (không chạy lại gợi ý), nên chuyển qua lại folder không mất màu.
+
+**Làm nóng model lúc mở app** (`_warmup_models`):
+- `__init__` khởi một luồng nền (daemon) gọi `config.warmup()` + `gallery.warmup()`.
+- Giao diện hiện ra ngay; lần phát hiện đầu không phải chờ import/nạp model (~6–10s).
 
 ### 5. `gallery.py` — Bộ nhớ ID theo ngoại hình
 
@@ -167,7 +179,7 @@ Greedy IoU matching: frame đầu → seed IDs, mỗi frame sau tính IoU giữa
    → Gợi ý ID (nếu có gallery)
                     ↓
 3. Hiển thị frame với khung cắt, đánh số #1, #2...
-   → Viền xanh/vàng nếu ID được gợi ý tự động
+   → Ô id tô nền xanh/vàng nếu ID được gợi ý tự động
    → Người dùng kiểm tra, chỉnh khung/sửa ID nếu cần
                     ↓
 4. Nhấn "Xử lý & xuất tất cả"
