@@ -229,8 +229,6 @@ test1/
 ├── yolov8m.pt           # YOLOv8 Medium (detection thuần)
 ├── yolov8s.pt           # YOLOv8 Small (nhẹ hơn)
 ├── yolov8n.pt           # YOLOv8 Nano (nhẹ nhất)
-├── rule.png             # Ảnh hướng dẫn quy tắc gán ID (cũ)
-├── rulev2.jpg           # Ảnh quy tắc gán ID (mới)
 ├── PROJECT_EXPLANATION.md   # Giải thích chi tiết dự án
 └── README.md            # File này
 ```
