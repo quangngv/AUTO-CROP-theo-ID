@@ -217,18 +217,18 @@ test1/
 ├── main.py              # Điểm khởi chạy
 ├── config.py            # Cấu hình model + thông số cắt
 ├── detection.py         # Logic phát hiện, khử trùng, cắt, tracking
-├── gui.py               # Giao diện PyQt5 (1073 dòng)
-├── gallery.py           # Bộ nhớ ID theo ngoại hình (ResNet50 + màu)
-├── gallery.json         # Vector đặc trưng đã lưu
-├── app_state.json       # Lưu phiên làm việc (tự động)
+├── gui.py               # Giao diện PyQt5 (1164 dòng)
+├── gallery.py           # Bộ nhớ ID theo ngoại hình (ResNet50 + HSV)
+├── gallery.json         # Vector đặc trưng đã lưu (tự động sinh)
+├── app_state.json       # Lưu phiên làm việc (tự động, bị gitignore)
 ├── requirements.txt     # Danh sách thư viện cần cài
-├── start.bat            # Chạy app không hiện terminal
+├── start.bat            # Chạy app không hiện terminal (pythonw)
 ├── restart.bat          # Khởi động lại app
-├── yolo26m-pose.pt      # Model chính (YOLO Pose, mới nhất)
-├── yolov8m-pose.pt      # Model dự phòng (YOLOv8 Medium Pose)
-├── yolov8m.pt           # YOLOv8 Medium (detection thuần)
-├── yolov8s.pt           # YOLOv8 Small (nhẹ hơn)
-├── yolov8n.pt           # YOLOv8 Nano (nhẹ nhất)
+├── yolo26m-pose.pt      # Model chính (YOLO Pose mới nhất, ~53MB)
+├── yolov8m-pose.pt      # Model dự phòng (YOLOv8 Medium Pose, ~53MB)
+├── yolov8m.pt           # YOLOv8 Medium (detection thuần, ~52MB)
+├── yolov8s.pt           # YOLOv8 Small (nhẹ hơn, ~22MB)
+├── yolov8n.pt           # YOLOv8 Nano (nhẹ nhất, ~6.5MB)
 ├── PROJECT_EXPLANATION.md   # Giải thích chi tiết dự án
 └── README.md            # File này
 ```

@@ -41,6 +41,18 @@ class FrameEditor(QWidget):
         self._drag = None         # (index, mode)  mode: move/l/r/t/b/tl/tr/bl/br
         self._last = None         # vị trí chuột trước (toạ độ ảnh gốc)
         self._hint = "Chọn folder rồi nhấn 'Tải & phát hiện'"
+        self._zoom = 1.0          # 1.0 = vừa khung; >1 = phóng to
+        self._panx = 0.0          # dịch ảnh (pixel màn hình)
+        self._pany = 0.0
+        self._panning = False
+        self._pan_last = None
+        self._nav = False         # chế độ di chuyển/zoom (tắt = ảnh cố định, rê khung)
+
+    def set_nav(self, on):
+        """Bật/tắt chế độ di chuyển: bật mới được zoom+kéo ảnh; tắt thì cố định để chỉnh khung."""
+        self._nav = bool(on)
+        self._panning = False
+        self.setCursor(Qt.OpenHandCursor if self._nav else Qt.ArrowCursor)
 
     # --- dữ liệu ---
     def set_frame(self, bgr):
@@ -55,6 +67,10 @@ class FrameEditor(QWidget):
         self.boxes = [[int(v) for v in b] for b in boxes]
         self.labels = list(labels)
         self.selected = 0 if self.boxes else None
+        self.reset_view()                 # folder mới -> về vừa khung
+
+    def reset_view(self):
+        self._zoom = 1.0; self._panx = 0.0; self._pany = 0.0
         self.update()
 
     def get_boxes(self):
@@ -66,14 +82,39 @@ class FrameEditor(QWidget):
             self.selected = idx
             self.update()
 
-    # --- ánh xạ toạ độ màn hình <-> ảnh gốc (ảnh canh giữa, giữ tỉ lệ) ---
+    # --- ánh xạ toạ độ màn hình <-> ảnh gốc (vừa khung + zoom + dịch) ---
     def _geom(self):
         if self._img is None:
             return 1.0, 0.0, 0.0
         W, H = self.width(), self.height()
         w, h = self._img.width(), self._img.height()
-        s = min(W / w, H / h)
-        return s, (W - w * s) / 2, (H - h * s) / 2
+        s = min(W / w, H / h) * self._zoom
+        ox = (W - w * s) / 2 + self._panx
+        oy = (H - h * s) / 2 + self._pany
+        return s, ox, oy
+
+    def zoom_at(self, factor, mx, my):
+        """Phóng to/thu nhỏ quanh điểm (mx,my) trên màn hình."""
+        if self._img is None:
+            return
+        ix, iy = self._to_img(QPoint(int(mx), int(my)))
+        self._zoom = max(1.0, min(self._zoom * factor, 12.0))
+        if self._zoom <= 1.0:                         # về vừa khung -> bỏ dịch
+            self._panx = self._pany = 0.0
+            self.update(); return
+        W, H = self.width(), self.height()
+        w, h = self._img.width(), self._img.height()
+        s = min(W / w, H / h) * self._zoom
+        self._panx = mx - (ix * s + (W - w * s) / 2)
+        self._pany = my - (iy * s + (H - h * s) / 2)
+        self.update()
+
+    def wheelEvent(self, e):
+        if self._img is None or not self._nav:    # chỉ zoom khi bật chế độ di chuyển
+            super().wheelEvent(e); return
+        p = e.pos()
+        self.zoom_at(1.25 if e.angleDelta().y() > 0 else 0.8, p.x(), p.y())
+        e.accept()
 
     def _to_img(self, p):
         s, ox, oy = self._geom()
@@ -161,6 +202,15 @@ class FrameEditor(QWidget):
     def mousePressEvent(self, e):
         if self._img is None:
             return
+        # CHẾ ĐỘ DI CHUYỂN: mọi kéo = di chuyển ảnh (không đụng khung)
+        if self._nav or e.button() == Qt.MiddleButton:
+            if e.button() in (Qt.LeftButton, Qt.MiddleButton):
+                self._panning = True; self._pan_last = e.pos()
+                self.setCursor(Qt.ClosedHandCursor)
+            return
+        if e.button() != Qt.LeftButton:
+            return
+        # CHẾ ĐỘ CHỈNH KHUNG (ảnh cố định)
         # 1) Ưu tiên khung ĐANG CHỌN (kể cả khi bị khung khác đè) -> sửa luôn
         if self.selected is not None:
             mode = self._hit_box(self.selected, e.pos())
@@ -180,6 +230,12 @@ class FrameEditor(QWidget):
 
     def mouseMoveEvent(self, e):
         if self._img is None:
+            return
+        if self._panning:
+            d = e.pos() - self._pan_last
+            self._panx += d.x(); self._pany += d.y()
+            self._pan_last = e.pos(); self.update(); return
+        if self._nav:
             return
         if self._drag is None:
             mode = None
@@ -210,6 +266,9 @@ class FrameEditor(QWidget):
 
     def mouseReleaseEvent(self, e):
         self._drag = None
+        if self._panning:
+            self._panning = False
+            self.setCursor(Qt.ArrowCursor)
 
 # ===== CỬA SỔ CHÍNH =====
 class MainWindow(QMainWindow):
@@ -312,11 +371,24 @@ class MainWindow(QMainWindow):
                               "QPushButton:checked{background:#3a6ea5;color:#fff;}")
             btn.clicked.connect(lambda _=False, k=key: self._show_frame_pos(k))
             self.pos_buttons[key] = btn; pos_row.addWidget(btn)
+        pos_row.addSpacing(16)
+        self.btn_nav = QPushButton("✋ Di chuyển ảnh"); self.btn_nav.setCheckable(True)
+        self.btn_nav.setToolTip("Bật để ZOOM (lăn chuột) + KÉO di chuyển ảnh. Tắt để chỉnh khung.")
+        self.btn_nav.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
+                                   "QPushButton:checked{background:#28a745;color:#fff;}")
+        self.btn_nav.toggled.connect(self._toggle_nav)
+        pos_row.addWidget(self.btn_nav)
+        for label, fn in [("🔍－", lambda: self._zoom_btn(0.8)),
+                          ("🔍＋", lambda: self._zoom_btn(1.25)),
+                          ("Vừa khung", self.view.reset_view)]:
+            zb = QPushButton(label); zb.setFixedWidth(54 if "🔍" in label else 90)
+            zb.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}")
+            zb.clicked.connect(fn); pos_row.addWidget(zb)
         pos_row.addStretch()
         ll.addLayout(pos_row)
 
-        tip = QLabel("💡 Rê cạnh/góc để nới khung theo x, y; rê giữa để di chuyển. "
-                     "Chỉnh ở frame đầu sẽ áp cho cả clip.")
+        tip = QLabel("💡 Mặc định: ảnh CỐ ĐỊNH, rê cạnh/góc để chỉnh khung. Bấm '✋ Di chuyển ảnh' "
+                     "để lăn chuột ZOOM + kéo DI CHUYỂN; bấm lại để khoá, chỉnh khung tiếp.")
         tip.setStyleSheet("color:#888; font-weight:normal;"); tip.setWordWrap(True)
         ll.addWidget(tip)
         self.btn_reset_box = QPushButton("↺ Khôi phục khung tự động")
@@ -793,6 +865,15 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Đã lưu bộ nhớ id",
             f"Đã ghi nhớ {len(gal)} id. Từ giờ mở folder sẽ TỰ GỢI Ý id "
             f"(viền xanh = chắc, vàng = nên kiểm).")
+
+    def _toggle_nav(self, on):
+        """Bật/tắt chế độ di chuyển ảnh (zoom + kéo)."""
+        self.view.set_nav(on)
+        self.btn_nav.setText("✋ Đang di chuyển" if on else "✋ Di chuyển ảnh")
+
+    def _zoom_btn(self, factor):
+        """Nút zoom: phóng quanh tâm khung xem."""
+        self.view.zoom_at(factor, self.view.width() / 2, self.view.height() / 2)
 
     def _show_frame_pos(self, key):
         """Đổi ảnh nền sang frame ĐẦU/GIỮA/CUỐI để so sánh (giữ nguyên khung)."""
