@@ -43,7 +43,7 @@ _KP_CONF = 0.30                       # ngưỡng tin cậy của từng điểm
 # COCO không có điểm "đỉnh đầu" (chỉ mũi/mắt/tai) -> ước lượng đỉnh sọ phía trên
 # mắt/tai một khoảng _CROWN_FACTOR x S để KHÔNG lẹm vào tóc/đỉnh đầu.
 _CROWN_FACTOR = 0.60                  # đỉnh sọ ~ head_top - 0.75 x bề_rộng_vai
-_FINGER_FACTOR = 0.65                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
+_FINGER_FACTOR = 0.55                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
 _TORSO_FACTOR = 1.25                   # đáy crop = vai + 1.6 x S (tới ~ngực, không xuống mặt bàn)
 _SIDE_MARGIN = 0.20                  # nới hai bên (theo bề rộng vùng khớp)
 _MARGIN_PX = 5                        # nới thêm cố định (pixel)

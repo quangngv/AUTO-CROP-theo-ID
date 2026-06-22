@@ -665,6 +665,7 @@ class MainWindow(QMainWindow):
             "done": sorted(self.done),
             "current_folder": self._current_folder,
             "edits": self._saved_edits,
+            "frame_pos": self._frame_pos,         # vị trí khung đang xem (đầu/giữa/cuối) - nhớ mặc định
         }
         try:
             with open(self._state_path(), "w", encoding="utf-8") as f:
@@ -680,6 +681,9 @@ class MainWindow(QMainWindow):
         except Exception:
             return
         self._saved_edits = {k: v for k, v in data.get("edits", {}).items() if os.path.isdir(k)}
+        fp = data.get("frame_pos")                 # nhớ vị trí khung (đầu/giữa/cuối) trước khi nạp folder
+        if fp in ("first", "mid", "last"):
+            self._frame_pos = fp
         self._refresh_history()
         queue = [d for d in data.get("queue", []) if os.path.isdir(d)]
         if queue:
@@ -700,6 +704,7 @@ class MainWindow(QMainWindow):
         if d:
             self.queue = []
             self.queue_list.clear(); self.queue_group.hide()
+            self._res_extra = []; self._res_selected = None   # mở folder mới -> xoá folder cũ ở tab Ảnh đã cắt
             self.path_edit.setText(d)
 
     def browse_batch(self):
@@ -726,6 +731,7 @@ class MainWindow(QMainWindow):
         self.queue = folders
         self.qi = 0
         self.done = set()
+        self._res_extra = []; self._res_selected = None   # mở bộ folder mới -> xoá folder cũ ở tab Ảnh đã cắt
         self._build_queue_list()
         self._load_queue_current()
 
@@ -939,9 +945,8 @@ class MainWindow(QMainWindow):
 
     def _populate_ui(self, first_img, saved_boxes, saved_ids, suggest_colors=None):
         """Dựng khung + form gán id (dùng chung cho mở folder và tạo bộ nhớ id)."""
-        self._frame_pos = "first"
-        for key, btn in self.pos_buttons.items():
-            btn.setChecked(key == "first")
+        # GIỮ vị trí khung đang xem (đầu/giữa/cuối) qua các folder — KHÔNG ép về "first" nữa.
+        pos = self._frame_pos if self._frame_pos in ("first", "mid", "last") else "first"
         labels = [str(i + 1) for i in range(len(self.first_boxes))]
         self.view.set_frame(first_img)
         self.view.set_boxes(saved_boxes, labels)
@@ -958,6 +963,12 @@ class MainWindow(QMainWindow):
                              deletable=self.first_kpts[i] is None)   # None = khung vẽ tay
         if self.id_buttons:
             self._highlight_row(0)
+
+        # tô nút + đổi ảnh nền sang đúng vị trí đã nhớ (giữa/cuối). "first" đã có sẵn first_img.
+        for key, btn in self.pos_buttons.items():
+            btn.setChecked(key == pos)
+        if pos != "first" and len(self.frames) > 1:
+            self._show_frame_pos(pos)
 
     def _add_id_row(self, i, value="", color=None, deletable=False):
         """Dựng 1 hàng gán id (nút chọn khung + ô id) cho khung thứ i, gắn vào form.
@@ -1165,6 +1176,7 @@ class MainWindow(QMainWindow):
         self.auto_crops = [list(crop_region(self.first_boxes[i], self.first_kpts[i], w0, h0))
                            for i in range(len(self.first_boxes))]
         self._gallery_img = img
+        self._frame_pos = "first"        # ảnh quy tắc chỉ 1 frame -> luôn xem "đầu"
         self._populate_ui(img, [list(b) for b in self.auto_crops], ["" for _ in self.first_boxes])
         self.btn_savegal.setEnabled(True)
         self.tabs.setCurrentIndex(0)
@@ -1373,9 +1385,13 @@ class MainWindow(QMainWindow):
             self.res_tree.addTopLevelItem(top)
             if folder == prev:
                 reselect = top
+        if reselect is not None:                      # GIỮ folder đang xem (chuyển tab/mở lại vẫn thấy)
+            self.res_tree.setCurrentItem(reselect)    # tô sáng lại trong cây
+            self.res_tree.blockSignals(False)
+            self._res_selected = prev
+            self._load_folder_thumbs(prev)            # nạp thẳng ảnh -> chắc chắn hiện lại đúng phần đó
+            return
         self.res_tree.blockSignals(False)
-        if reselect is not None:                      # giữ folder đang xem sau khi làm mới
-            self.res_tree.setCurrentItem(reselect)
         if not folders:
             self.res_status.setText("Chưa có folder nào được chọn — mở folder ở tab Làm việc trước.")
         else:

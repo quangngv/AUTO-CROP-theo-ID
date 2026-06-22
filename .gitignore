@@ -47,3 +47,6 @@ rule*.jpg
 # Logs
 *.log
 *.json
+
+# Todo
+todo.txt
