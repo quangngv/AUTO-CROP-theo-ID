@@ -29,8 +29,12 @@ _TRACK_IOU = 0.3                      # ngưỡng IoU để coi là cùng một 
 # ----- Đánh số -----
 _NUM_ROWS = 3                         # số HÀNG ghế trong phòng (đánh số dưới->trên, trái->phải)
 # Bỏ người bị CẮT ở rìa TRÁI khung hình (giám sát/qua đường, nửa người ngoài khung).
-# CHỈ bên trái (giữ sinh viên sát mép phải). Khung x1 <= _DROP_EDGE_PX px -> bỏ. 0 = TẮT.
+# Khung x1 <= _DROP_EDGE_PX px -> bỏ. 0 = TẮT. (cũng là biên "chạm mép" cho rìa phải bên dưới)
 _DROP_EDGE_PX = 5
+# Bỏ người bị CẮT ở rìa PHẢI: khung CHẠM mép phải (x2 >= W - _DROP_EDGE_PX) VÀ chỉ ló một
+# DẢI HẸP (bề rộng < _DROP_RIGHT_MAXW px) -> người ngồi ngoài rìa, hầu hết thân ngoài khung
+# (vd "người số 12"). Người sát mép phải nhưng ĐỦ THÂN (bề rộng >= ngưỡng) vẫn GIỮ. 0 = TẮT.
+_DROP_RIGHT_MAXW = 170
 
 # ----- Cắt theo điểm khớp (pose): chân dung ĐẦU + NỬA NGỰC -----
 # Mọi khoảng cách đo theo BỀ RỘNG VAI (S) - ổn định kể cả khi người CÚI/CHỒM xuống
@@ -38,11 +42,11 @@ _DROP_EDGE_PX = 5
 _KP_CONF = 0.30                       # ngưỡng tin cậy của từng điểm khớp
 # COCO không có điểm "đỉnh đầu" (chỉ mũi/mắt/tai) -> ước lượng đỉnh sọ phía trên
 # mắt/tai một khoảng _CROWN_FACTOR x S để KHÔNG lẹm vào tóc/đỉnh đầu.
-_CROWN_FACTOR = 0.65                  # đỉnh sọ ~ head_top - 0.75 x bề_rộng_vai
-_FINGER_FACTOR = 0.60                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
+_CROWN_FACTOR = 0.60                  # đỉnh sọ ~ head_top - 0.75 x bề_rộng_vai
+_FINGER_FACTOR = 0.65                 # khi GIƠ TAY: nới trên cổ tay 0.55 x S -> lấy đủ NGÓN TAY
 _TORSO_FACTOR = 1.25                   # đáy crop = vai + 1.6 x S (tới ~ngực, không xuống mặt bàn)
-_SIDE_MARGIN = 0.20                   # nới hai bên (theo bề rộng vùng khớp)
-_MARGIN_PX = 7                        # nới thêm cố định (pixel)
+_SIDE_MARGIN = 0.20                  # nới hai bên (theo bề rộng vùng khớp)
+_MARGIN_PX = 5                        # nới thêm cố định (pixel)
 # Khi thiếu điểm khớp đầu/vai (bị che nặng) -> fallback: dùng khung bbox + nới _PAD
 _PAD = 0.12
 

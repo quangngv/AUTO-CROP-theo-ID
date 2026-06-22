@@ -12,7 +12,7 @@ import cv2
 
 from config import (
     predict, _CONF, _NMS_IOU, _TRACK_IOU, _HEAD_DUP, _NUM_ROWS, _DROP_EDGE_PX,
-    _KP_CONF, _CROWN_FACTOR, _FINGER_FACTOR, _TORSO_FACTOR,
+    _DROP_RIGHT_MAXW, _KP_CONF, _CROWN_FACTOR, _FINGER_FACTOR, _TORSO_FACTOR,
     _SIDE_MARGIN, _MARGIN_PX, _PAD, _IMG_EXTS,
 )
 
@@ -85,9 +85,16 @@ def detect(image):
             keep_b.append(b); keep_k.append(kb)
 
     # Bỏ người bị CẮT ở rìa TRÁI khung hình (giám sát/qua đường, nửa người ngoài khung).
-    # CHỈ bên trái -> giữ nguyên sinh viên ngồi sát mép phải.
     if _DROP_EDGE_PX > 0:
         keep = [(b, kb) for b, kb in zip(keep_b, keep_k) if b[0] > _DROP_EDGE_PX]
+        keep_b = [b for b, _ in keep]
+        keep_k = [kb for _, kb in keep]
+    # Bỏ người bị CẮT ở rìa PHẢI: khung chạm mép phải VÀ chỉ ló một dải hẹp (hầu hết thân
+    # ngoài khung, vd "người số 12"). Người sát mép phải nhưng ĐỦ THÂN vẫn được giữ.
+    if _DROP_RIGHT_MAXW > 0:
+        w = image.shape[1]
+        keep = [(b, kb) for b, kb in zip(keep_b, keep_k)
+                if not (b[2] >= w - _DROP_EDGE_PX and (b[2] - b[0]) < _DROP_RIGHT_MAXW)]
         keep_b = [b for b, _ in keep]
         keep_k = [kb for _, kb in keep]
     return keep_b, keep_k
@@ -221,13 +228,15 @@ def annotate(image, boxes, labels):
 
 # ===== LIỆT KÊ FILE =====
 def list_frames(folder):
-    """Trả về danh sách đường dẫn frame, sắp xếp theo SỐ trong tên file."""
+    """Trả về danh sách đường dẫn frame, sắp theo SỐ TỰ NHIÊN trong tên file.
+    Natural sort: tách số/chữ nên '9.jpg' đứng TRƯỚC '37.jpg' (không bị so chuỗi kiểu
+    1,10,11,...,2,20 khiến giữa/cuối lấy sai frame). Khớp với cách sắp ở tab 'Ảnh đã cắt'."""
     files = [f for f in glob.glob(os.path.join(folder, '*'))
              if f.lower().endswith(_IMG_EXTS)]
 
     def key(p):
-        nums = re.findall(r'\d+', os.path.basename(p))
-        return (int(nums[0]) if nums else 0, os.path.basename(p))
+        name = os.path.basename(p)
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', name)]
 
     return sorted(files, key=key)
 

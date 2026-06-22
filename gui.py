@@ -2,6 +2,7 @@
 """Giao diện PyQt5 cho AUTO CROP theo ID."""
 
 import os
+import re
 import json
 import math
 import threading
@@ -326,6 +327,75 @@ class FrameEditor(QWidget):
             self._panning = False
             self.setCursor(Qt.ArrowCursor)
 
+# ===== HỘP THOẠI XEM ẢNH PHÓNG TO (xem nhanh ảnh đã cắt, lật trước/sau, xoá ảnh hỏng) =====
+class ImageViewerDialog(QDialog):
+    """Xem 1 ảnh phóng to trong danh sách; ← → lật ảnh; 🗑 xoá ảnh hỏng ngay tại chỗ.
+    Ảnh đã xoá ghi vào self.deleted để cửa sổ cha làm mới lưới + số đếm sau khi đóng."""
+    def __init__(self, paths, index, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Xem ảnh đã cắt")
+        self.resize(680, 780)
+        self.setStyleSheet("QDialog{background:#1e1e1e;} QLabel{color:#ddd;}"
+                           "QPushButton{background:#3a6ea5;color:#fff;border:none;padding:8px 14px;"
+                           "border-radius:6px;font-weight:bold;} QPushButton:hover{background:#4a7eb5;}")
+        self.paths = list(paths)
+        self.index = index
+        self.deleted = []                 # ảnh đã xoá trong phiên xem
+        lay = QVBoxLayout(self)
+        self.pic = QLabel(); self.pic.setAlignment(Qt.AlignCenter); self.pic.setMinimumSize(400, 520)
+        lay.addWidget(self.pic, 1)
+        self.cap = QLabel(); self.cap.setAlignment(Qt.AlignCenter); self.cap.setWordWrap(True)
+        lay.addWidget(self.cap)
+        row = QHBoxLayout()
+        b_prev = QPushButton("← Trước"); b_prev.clicked.connect(lambda: self._step(-1))
+        b_next = QPushButton("Sau →"); b_next.clicked.connect(lambda: self._step(1))
+        b_del = QPushButton("🗑 Xoá ảnh này"); b_del.setStyleSheet("background:#a33;")
+        b_del.clicked.connect(self._delete)
+        row.addWidget(b_prev); row.addWidget(b_next); row.addStretch(); row.addWidget(b_del)
+        lay.addLayout(row)
+        self._show_cur()
+
+    def _show_cur(self):
+        if not self.paths:
+            self.pic.setText("(Không còn ảnh)"); self.pic.setPixmap(QPixmap()); self.cap.setText(""); return
+        self.index = max(0, min(self.index, len(self.paths) - 1))
+        p = self.paths[self.index]
+        pm = QPixmap(p)
+        if not pm.isNull():
+            self.pic.setPixmap(pm.scaled(self.pic.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.pic.setText("(Không đọc được ảnh)")
+        self.cap.setText(f"{self.index + 1}/{len(self.paths)} — {os.path.basename(p)}")
+
+    def _step(self, d):
+        if self.paths:
+            self.index = (self.index + d) % len(self.paths)
+            self._show_cur()
+
+    def _delete(self):
+        if not self.paths:
+            return
+        p = self.paths[self.index]
+        if QMessageBox.question(self, "Xoá ảnh", f"Xoá ảnh này?\n{os.path.basename(p)}",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        try:
+            os.remove(p)
+        except OSError as e:
+            QMessageBox.warning(self, "Lỗi", f"Không xoá được: {e}"); return
+        self.deleted.append(p)
+        del self.paths[self.index]
+        self._show_cur()
+
+    def keyPressEvent(self, e):
+        if e.key() in (Qt.Key_Left,): self._step(-1)
+        elif e.key() in (Qt.Key_Right,): self._step(1)
+        elif e.key() in (Qt.Key_Delete,): self._delete()
+        else: super().keyPressEvent(e)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e); self._show_cur()
+
 # ===== CỬA SỔ CHÍNH =====
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -512,6 +582,8 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(work, "✏️ Làm việc")
         self._build_history_tab()
+        self._build_results_tab()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         self.statusBar().showMessage("Sẵn sàng — chọn thư mục chứa frame")
 
         # Trạng thái
@@ -530,6 +602,8 @@ class MainWindow(QMainWindow):
         self._saved_edits = {}      # {folder: {ids, boxes, done}} -> lưu ra đĩa
         self._gallery = gallery.load_gallery()   # bộ nhớ id theo ngoại hình
         self._gallery_img = None
+        self._res_extra = []        # folder xem thêm (ngoài các folder đã chọn) ở tab "Ảnh đã cắt"
+        self._res_selected = None   # đường dẫn folder id_ đang xem ảnh
         self._suggest_colors = []   # màu gợi ý từng ô id (None nếu không gợi ý/đã sửa tay)
 
         # Khôi phục cài đặt cửa sổ (kích thước / phóng to / vạch chia) từ lần trước
@@ -1182,6 +1256,229 @@ class MainWindow(QMainWindow):
             self.load_and_detect()
         self.tabs.setCurrentIndex(0)      # quay về tab Làm việc
 
+    # ---- trang Ảnh đã cắt (duyệt FOLDER ĐÃ CHỌN → id_ → ảnh, xem ngay trong app) ----
+    def _build_results_tab(self):
+        """Tab xem KẾT QUẢ. Bên trái là CÂY: mỗi folder đã chọn là 1 node, bên trong là các id_;
+        bấm 1 id_ thì bên phải hiện ảnh. Đỡ phải mở Windows Explorer để kiểm sau khi cắt."""
+        w = QWidget(); lay = QVBoxLayout(w); lay.setContentsMargins(12, 12, 12, 12); lay.setSpacing(8)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("📂 Các folder đã chọn — bấm 1 folder để xem ảnh:"))
+        top.addStretch()
+        b_pick = QPushButton("📂 Xem folder khác..."); b_pick.clicked.connect(self._res_pick)
+        top.addWidget(b_pick)
+        b_ref = QPushButton("🔄 Làm mới"); b_ref.clicked.connect(self._refresh_results)
+        top.addWidget(b_ref)
+        lay.addLayout(top)
+
+        hint = QLabel("Bấm 1 folder bên trái → ô chính hiện 3 ảnh (đầu/giữa/cuối) của từng id_ theo thứ tự. "
+                      "BẤM ĐÚP ảnh để phóng to / lật ← → cả id_ đó / xoá ảnh hỏng (chuột phải = menu nhanh).")
+        hint.setStyleSheet("color:#888;font-weight:normal;"); hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        split = QSplitter(Qt.Horizontal); split.setHandleWidth(8); split.setChildrenCollapsible(False)
+        split.setStyleSheet("QSplitter::handle{background:#444;border-radius:3px;margin:2px;}"
+                            "QSplitter::handle:hover{background:#3a6ea5;}")
+        # trái: CÂY folder đã chọn -> id_
+        self.res_tree = QTreeWidget(); self.res_tree.setHeaderHidden(True)
+        self.res_tree.setStyleSheet(
+            "QTreeWidget{background:#262626;border:1px solid #555;border-radius:6px;font-size:13px;}"
+            "QTreeWidget::item{padding:5px;}"
+            "QTreeWidget::item:selected{background:#3a6ea5;color:#fff;}")
+        self.res_tree.currentItemChanged.connect(lambda *_: self._on_res_tree_select())
+        split.addWidget(self.res_tree)
+        # phải: lưới thumbnail ảnh trong id_ đang chọn
+        self.res_thumbs = QListWidget()
+        self.res_thumbs.setViewMode(QListView.IconMode)
+        self.res_thumbs.setIconSize(QSize(120, 150))
+        self.res_thumbs.setResizeMode(QListView.Adjust)
+        self.res_thumbs.setMovement(QListView.Static)
+        self.res_thumbs.setSpacing(8)
+        self.res_thumbs.setStyleSheet(
+            "QListWidget{background:#262626;border:1px solid #555;border-radius:6px;}"
+            "QListWidget::item{color:#bbb;}"
+            "QListWidget::item:selected{background:#3a6ea5;color:#fff;border-radius:4px;}")
+        self.res_thumbs.itemDoubleClicked.connect(lambda _it: self._open_image_viewer())
+        self.res_thumbs.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.res_thumbs.customContextMenuRequested.connect(self._res_thumb_menu)
+        split.addWidget(self.res_thumbs)
+        split.setStretchFactor(0, 0); split.setStretchFactor(1, 1)
+        split.setSizes([300, 700])
+        lay.addWidget(split, 1)
+
+        self.res_status = QLabel(""); self.res_status.setStyleSheet("color:#888;font-weight:normal;")
+        lay.addWidget(self.res_status)
+
+        self._results_tab_index = self.tabs.addTab(w, "🖼 Ảnh đã cắt")
+
+    @staticmethod
+    def _natkey(name):
+        """Khoá sắp xếp TỰ NHIÊN: tách số/chữ để '..._9' đứng TRƯỚC '..._37' (không bị so chuỗi)."""
+        return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', name)]
+
+    @classmethod
+    def _list_images(cls, folder):
+        """Danh sách đường dẫn ảnh trong 1 folder, sắp theo SỐ tự nhiên (đúng thứ tự frame)."""
+        exts = (".jpg", ".jpeg", ".png", ".bmp")
+        try:
+            names = [n for n in os.listdir(folder) if n.lower().endswith(exts)]
+        except OSError:
+            return []
+        names.sort(key=cls._natkey)
+        return [os.path.join(folder, n) for n in names]
+
+    def _result_source_folders(self):
+        """Các folder ĐÃ CHỌN để xem kết quả: hàng đợi nếu có, không thì folder đang làm,
+        cộng thêm các folder người dùng tự thêm bằng 'Xem folder khác...'. Giữ thứ tự, bỏ trùng."""
+        folders = list(self.queue) if self.queue else []
+        if not folders:
+            cur = self._current_folder or self.path_edit.text().strip().strip('"')
+            if cur:
+                folders.append(cur)
+        folders += list(self._res_extra)
+        out, seen = [], set()
+        for f in folders:
+            if f and os.path.isdir(f) and f not in seen:
+                seen.add(f); out.append(f)
+        return out
+
+    def _on_tab_changed(self, idx):
+        """Sang tab Ảnh đã cắt -> làm mới cây folder đã chọn."""
+        if idx == getattr(self, "_results_tab_index", -1):
+            self._refresh_results()
+
+    def _res_pick(self):
+        """Thêm 1 folder bất kỳ vào cây để xem (ngoài các folder đã chọn)."""
+        d = QFileDialog.getExistingDirectory(self, "Chọn folder chứa các id_",
+                                             _start_dir(self.path_edit.text()))
+        if d:
+            if d not in self._res_extra:
+                self._res_extra.append(d)
+            self._refresh_results()
+
+    def _refresh_results(self):
+        """Dựng lại danh sách FOLDER LỚN đã chọn (phẳng, không xổ id_). Bấm 1 folder -> ô chính
+        gộp 3 ảnh đầu/giữa/cuối của MỌI id_ bên trong, sắp theo thứ tự id."""
+        if not hasattr(self, "res_tree"):
+            return
+        prev = self._res_selected
+        self.res_tree.blockSignals(True)
+        self.res_tree.clear(); self.res_thumbs.clear()
+        folders = self._result_source_folders()
+        reselect = None
+        for folder in folders:
+            nid = len(self._id_subfolders(folder))
+            top = QTreeWidgetItem([f"📁 {os.path.basename(folder)}  ({nid} id)"])
+            top.setData(0, Qt.UserRole, folder)
+            top.setToolTip(0, folder)
+            self.res_tree.addTopLevelItem(top)
+            if folder == prev:
+                reselect = top
+        self.res_tree.blockSignals(False)
+        if reselect is not None:                      # giữ folder đang xem sau khi làm mới
+            self.res_tree.setCurrentItem(reselect)
+        if not folders:
+            self.res_status.setText("Chưa có folder nào được chọn — mở folder ở tab Làm việc trước.")
+        else:
+            self.res_status.setText(f"{len(folders)} folder đã chọn — bấm 1 folder để xem ảnh các id_.")
+
+    @staticmethod
+    def _id_sort_key(name):
+        """Sắp id_ theo SỐ nếu là số (id_2 trước id_10), không thì theo tên."""
+        tail = name[3:]
+        return (0, int(tail)) if tail.isdigit() else (1, name)
+
+    def _id_subfolders(self, folder):
+        """Tên các folder id_* trong 1 folder lớn, sắp theo số id."""
+        try:
+            subs = [d for d in os.listdir(folder)
+                    if d.startswith("id_") and os.path.isdir(os.path.join(folder, d))]
+        except OSError:
+            return []
+        return sorted(subs, key=self._id_sort_key)
+
+    def _on_res_tree_select(self):
+        """Chọn 1 folder lớn -> đổ 3 ảnh đại diện của mọi id_ bên trong ra ô chính."""
+        self.res_thumbs.clear()
+        item = self.res_tree.currentItem()
+        folder = item.data(0, Qt.UserRole) if item else None
+        self._res_selected = folder
+        if folder:
+            self._load_folder_thumbs(folder)
+
+    @staticmethod
+    def _pick3(paths):
+        """Lấy 3 ảnh ĐẠI DIỆN: đầu / giữa / cuối (ít hơn 3 thì lấy đủ số có)."""
+        n = len(paths)
+        if n == 0:
+            return []
+        if n == 1:
+            return [(paths[0], "Đầu")]
+        if n == 2:
+            return [(paths[0], "Đầu"), (paths[-1], "Cuối")]
+        return [(paths[0], "Đầu"), (paths[n // 2], "Giữa"), (paths[-1], "Cuối")]
+
+    def _load_folder_thumbs(self, folder):
+        """Gộp ảnh của MỌI id_ trong folder lớn: mỗi id_ chỉ 3 ảnh (đầu/giữa/cuối), theo thứ tự id."""
+        self.res_thumbs.clear()
+        subs = self._id_subfolders(folder)
+        total = 0
+        for d in subs:
+            paths = self._list_images(os.path.join(folder, d))
+            total += len(paths)
+            for p, tag in self._pick3(paths):
+                it = QListWidgetItem(f"{d} · {tag}")
+                pm = QPixmap(p)
+                if not pm.isNull():
+                    it.setIcon(QIcon(pm))
+                it.setData(Qt.UserRole, p)
+                self.res_thumbs.addItem(it)
+        if subs:
+            self.res_status.setText(
+                f"{os.path.basename(folder)} — {len(subs)} id, tổng {total} ảnh "
+                f"(mỗi id hiện 3 ảnh đầu/giữa/cuối; bấm đúp 1 ảnh để xem to / lật hết / xoá).")
+        else:
+            self.res_status.setText(f"{os.path.basename(folder)} — chưa có folder id_ nào (chưa xuất?).")
+
+    def _open_image_viewer(self):
+        """Mở hộp thoại xem ảnh phóng to. Lật được HẾT ảnh trong CHÍNH id_ của ảnh được bấm
+        (suy ra folder id_ từ đường dẫn ảnh), mở đúng ở ảnh đã bấm."""
+        item = self.res_thumbs.currentItem()
+        if not item:
+            return
+        p = item.data(Qt.UserRole)
+        idfolder = os.path.dirname(p)
+        paths = self._list_images(idfolder)
+        if not paths:
+            return
+        idx = paths.index(p) if p in paths else 0
+        dlg = ImageViewerDialog(paths, idx, self)
+        dlg.exec_()
+        if dlg.deleted and self._res_selected:        # đã xoá ảnh -> dựng lại ô chính
+            self._load_folder_thumbs(self._res_selected)
+
+    def _res_thumb_menu(self, pos):
+        """Chuột phải trên 1 thumbnail: xem to / xoá ảnh."""
+        item = self.res_thumbs.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        act_view = menu.addAction("🔍 Xem ảnh")
+        act_del = menu.addAction("🗑 Xoá ảnh này")
+        chosen = menu.exec_(self.res_thumbs.mapToGlobal(pos))
+        if chosen is act_view:
+            self.res_thumbs.setCurrentItem(item); self._open_image_viewer()
+        elif chosen is act_del:
+            p = item.data(Qt.UserRole)
+            if QMessageBox.question(self, "Xoá ảnh", f"Xoá ảnh này?\n{os.path.basename(p)}",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+            try:
+                os.remove(p)
+            except OSError as e:
+                QMessageBox.warning(self, "Lỗi", f"Không xoá được: {e}"); return
+            if self._res_selected:
+                self._load_folder_thumbs(self._res_selected)
+
     @staticmethod
     def _suggest_style(color):
         """Stylesheet TÔ NỀN cho ô gợi ý id: nền đậm + chữ đen -> nổi rõ trên nền tối.
@@ -1200,53 +1497,114 @@ class MainWindow(QMainWindow):
         cb.lineEdit().setPlaceholderText("bỏ")
         return cb
 
-    def _collect_mapping(self):
-        """track_id (1..K) -> id_str, chỉ lấy ô có nhập."""
-        mapping = {}
-        for i, edit in enumerate(self.id_inputs):
-            val = edit.currentText().strip()
-            if val:
-                mapping[i + 1] = val
-        return mapping
-
-    def _current_deltas(self):
-        """Chênh lệch khung do người dùng rê tay so với khung tự động (key = seed id)."""
+    def _collect_export_plan(self):
+        """Tách dữ liệu xuất thành 2 nhóm:
+          - khung PHÁT HIỆN (có keypoint): chạy IoUTracker + crop_region + delta như cũ.
+          - khung VẼ TAY (kpts=None): cắt CỐ ĐỊNH 1 vùng (đúng khung vẽ) trên mọi frame,
+            KHÔNG đưa vào tracker (tránh khớp nhầm người khác làm ảnh nhảy/không đều).
+        Trả về (det_boxes, det_kpts, mapping{detidx+1:id}, deltas{detidx+1:delta}, manual_crops{id:rect}).
+        """
         edited = self.view.get_boxes()
-        deltas = {}
-        for i, eb in enumerate(edited):
-            ab = self.auto_crops[i]
-            deltas[i + 1] = (eb[0] - ab[0], eb[1] - ab[1], eb[2] - ab[2], eb[3] - ab[3])
-        return deltas
+        det_boxes, det_kpts, mapping, deltas, manual_crops = [], [], {}, {}, {}
+        for i in range(len(self.first_boxes)):
+            val = self.id_inputs[i].currentText().strip() if i < len(self.id_inputs) else ""
+            eb = edited[i] if i < len(edited) else self.auto_crops[i]
+            if self.first_kpts[i] is None:                 # khung vẽ tay -> cắt cố định
+                if val:
+                    manual_crops[val] = (int(eb[0]), int(eb[1]), int(eb[2]), int(eb[3]))
+            else:                                          # khung phát hiện -> tracking
+                di = len(det_boxes)
+                det_boxes.append(self.first_boxes[i])
+                det_kpts.append(self.first_kpts[i])
+                if val:
+                    mapping[di + 1] = val
+                    ab = self.auto_crops[i]
+                    deltas[di + 1] = (eb[0] - ab[0], eb[1] - ab[1], eb[2] - ab[2], eb[3] - ab[3])
+        return det_boxes, det_kpts, mapping, deltas, manual_crops
 
-    def _export_folder(self, folder, frames, first_boxes, first_kpts, mapping, deltas, on_frame=None):
-        """Cắt & lưu một folder. mapping/deltas key theo seed id (chỉ số + 1). Trả về counts."""
-        counts = {idv: 0 for idv in set(mapping.values())}
-        for idv in set(mapping.values()):
+    @staticmethod
+    def _boxes_from_record(rec):
+        """Danh sách KHUNG CẮT đã chỉnh tay của 1 folder (mọi slot, theo thứ tự gốc), từ bản lưu
+        (cache phiên hoặc app_state). KHÔNG lấy id riêng của folder — id sẽ gán lại theo MẪU."""
+        return [[int(v) for v in b] for b in (rec.get("boxes") or [])]
+
+    @staticmethod
+    def _fit_box(x1, y1, x2, y2, w, h):
+        """Dời khung vào trong ảnh nhưng GIỮ NGUYÊN kích thước nếu được (chỉ co lại khi to hơn ảnh).
+        Nhờ vậy mọi ảnh trong 1 id giữ đúng W×H -> đều nhau, không bị cắt cụt méo ở mép."""
+        bw, bh = x2 - x1, y2 - y1
+        if bw >= w:
+            x1, x2 = 0, w
+        elif x1 < 0:
+            x1, x2 = 0, bw
+        elif x2 > w:
+            x1, x2 = w - bw, w
+        if bh >= h:
+            y1, y2 = 0, h
+        elif y1 < 0:
+            y1, y2 = 0, bh
+        elif y2 > h:
+            y1, y2 = h - bh, h
+        return int(round(x1)), int(round(y1)), int(round(x2)), int(round(y2))
+
+    def _export_folder(self, folder, frames, first_boxes, first_kpts, mapping, deltas,
+                       manual_crops=None, on_frame=None):
+        """Cắt & lưu một folder. mapping/deltas key theo seed id (chỉ số + 1).
+        manual_crops {id: (x1,y1,x2,y2)} = khung VẼ TAY, cắt CỐ ĐỊNH cùng vùng mọi frame.
+        Trả về counts."""
+        manual_crops = manual_crops or {}
+        all_ids = set(mapping.values()) | set(manual_crops.keys())
+        counts = {idv: 0 for idv in all_ids}
+        for idv in all_ids:
             os.makedirs(os.path.join(folder, f"id_{idv}"), exist_ok=True)
         tracker = IoUTracker(first_boxes)
-        last = {}   # idv -> (x1,y1,x2,y2) khung lần gần nhất, để GIỮ KHUNG khi frame mất dấu
+        last = {}        # idv -> (x1,y1,x2,y2) khung lần gần nhất, để GIỮ KHUNG khi frame mất dấu
+        fixed_size = {}  # tid -> (W,H) chốt ở frame đầu: mọi ảnh trong 1 id ĐỀU kích thước
         for fi, fpath in enumerate(frames):
             img = cv2.imread(fpath)
             if img is not None:
                 h, w = img.shape[:2]
                 fname = os.path.basename(fpath)
+                # KHUNG VẼ TAY: cắt cố định 1 vùng cho mọi frame (model không thấy -> giữ ĐỀU).
+                for idv, rect in manual_crops.items():
+                    x1, y1, x2, y2 = rect
+                    x1 = max(0, min(int(x1), w)); x2 = max(0, min(int(x2), w))
+                    y1 = max(0, min(int(y1), h)); y2 = max(0, min(int(y2), h))
+                    if x2 - x1 >= 5 and y2 - y1 >= 5:
+                        crop = img[y1:y2, x1:x2]
+                        if crop.size:
+                            cv2.imwrite(os.path.join(folder, f"id_{idv}", fname), crop)
+                            counts[idv] += 1
                 if fi == 0:
                     dets, dkpts = first_boxes, first_kpts
                     matches = {i: i + 1 for i in range(len(dets))}
-                else:
+                elif mapping:
                     dets, dkpts = detect(img)
                     matches = tracker.update(dets)
+                else:
+                    dets, dkpts, matches = [], [], {}   # chỉ cắt khung cố định -> khỏi chạy YOLO
                 done = set()
                 for di, tid in matches.items():
                     idv = mapping.get(tid)
                     if idv is None:
                         continue
+                    # khung "tự nhiên" theo pose frame này (+ chỉnh tay của người dùng)
                     x1, y1, x2, y2 = crop_region(dets[di], dkpts[di], w, h)
                     dl = deltas.get(tid)
                     if dl:
                         x1 += dl[0]; y1 += dl[1]; x2 += dl[2]; y2 += dl[3]
-                    x1 = max(0, min(int(x1), w)); x2 = max(0, min(int(x2), w))
-                    y1 = max(0, min(int(y1), h)); y2 = max(0, min(int(y2), h))
+                    if fi == 0:
+                        # frame đầu = khung tham chiếu -> CHỐT kích thước cố định cho id này
+                        fixed_size[tid] = (x2 - x1, y2 - y1)
+                    else:
+                        # giữ nguyên W×H frame đầu, đặt TÂM theo khung tự nhiên (bám người).
+                        # chốt x2=x1+wf để mọi ảnh trong id ĐỀU đúng kích thước (không lệch 1px).
+                        wf, hf = fixed_size.get(tid, (x2 - x1, y2 - y1))
+                        cx = (x1 + x2) / 2.0; cy = (y1 + y2) / 2.0
+                        x1 = int(round(cx - wf / 2.0)); x2 = x1 + wf
+                        y1 = int(round(cy - hf / 2.0)); y2 = y1 + hf
+                    # dời khung vào trong ảnh nhưng GIỮ NGUYÊN kích thước (không cắt cụt ở mép)
+                    x1, y1, x2, y2 = self._fit_box(x1, y1, x2, y2, w, h)
                     if x2 - x1 < 5 or y2 - y1 < 5:
                         continue
                     crop = img[y1:y2, x1:x2]
@@ -1270,12 +1628,11 @@ class MainWindow(QMainWindow):
     def export_all(self):
         if not self.frames or not self.first_boxes:
             return
-        mapping = self._collect_mapping()
-        if not mapping:
+        det_boxes, det_kpts, mapping, deltas, manual_crops = self._collect_export_plan()
+        if not mapping and not manual_crops:
             QMessageBox.warning(self, "Chưa gán id", "Hãy gõ id cho ít nhất một khung."); return
 
         folder = self.path_edit.text().strip().strip('"')
-        deltas = self._current_deltas()
         self.progress.setMaximum(len(self.frames)); self.progress.setValue(0)
         self.btn_export.setEnabled(False)
 
@@ -1285,36 +1642,33 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"Đang xử lý frame {fi + 1}/{total}...")
                 QApplication.processEvents()
 
-        counts = self._export_folder(folder, self.frames, self.first_boxes,
-                                     self.first_kpts, mapping, deltas, on_frame)
+        counts = self._export_folder(folder, self.frames, det_boxes, det_kpts,
+                                     mapping, deltas, manual_crops, on_frame)
         self.btn_export.setEnabled(True)
         summary = "\n".join(f"  id_{k}: {v} ảnh" for k, v in sorted(counts.items()))
+
+        # cập nhật cây tab "Ảnh đã cắt" để sang tab là kiểm được folder vừa xuất ngay
+        self._refresh_results()
 
         if self.queue:
             self.done.add(self.qi)
             self._refresh_queue_marks()
 
+        # KHÔNG tự nhảy sang folder kế: ở lại folder hiện tại để chỉnh tiếp.
+        # Người dùng tự bấm folder khác trong danh sách bên trái khi muốn chuyển.
         remaining = [i for i in range(len(self.queue)) if i not in self.done]
-        if remaining:
-            QMessageBox.information(self, "Xong folder này",
-                f"Đã xuất vào:\n{folder}\n\nSố ảnh mỗi id:\n{summary}\n\n"
-                f"Còn {len(remaining)} folder chưa làm → chuyển sang folder kế tiếp.")
-            self.qi = remaining[0]
-            self._load_queue_current()
-            return
-
-        done = f" (đã xong {len(self.queue)} folder)" if self.queue else ""
-        QMessageBox.information(self, "Hoàn tất",
-            f"Đã xuất vào:\n{folder}\n\nSố ảnh mỗi id:\n{summary}{done}")
-        self.statusBar().showMessage(f"Hoàn tất{done} — {len(counts)} id, tổng {sum(counts.values())} ảnh.")
+        extra = (f"\n\nCòn {len(remaining)} folder chưa làm — bấm folder trong danh sách bên trái "
+                 f"khi muốn chuyển (KHÔNG tự chuyển nữa)." if remaining else
+                 (f"\n\nĐã xong tất cả {len(self.queue)} folder." if self.queue else ""))
+        QMessageBox.information(self, "Xong folder này",
+            f"Đã xuất vào:\n{folder}\n\nSố ảnh mỗi id:\n{summary}{extra}")
+        self.statusBar().showMessage(
+            f"Đã xuất {len(counts)} id, tổng {sum(counts.values())} ảnh — ở lại folder này để chỉnh tiếp.")
 
     @staticmethod
     def _match_boxes(new_boxes, ref_boxes, max_shift=1.2):
-        """
-        Khớp 1-1 khung folder mới với khung mẫu theo KHOẢNG CÁCH TÂM (bền hơn IoU khi
-        người dịch nhẹ). Chỉ ghép khi tâm cách nhau <= max_shift x bề rộng người mẫu.
-        Trả về {new_idx: ref_idx}.
-        """
+        """Khớp 1-1 khung folder mới với khung mẫu theo KHOẢNG CÁCH TÂM (bền hơn IoU khi người dịch
+        nhẹ). Chỉ ghép khi tâm cách nhau <= max_shift x bề rộng người mẫu. Trả {new_idx: ref_idx}."""
         def cen(b):
             return ((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
         pairs = []
@@ -1323,8 +1677,7 @@ class MainWindow(QMainWindow):
             for ri, rb in enumerate(ref_boxes):
                 cr = cen(rb)
                 d = math.hypot(cn[0] - cr[0], cn[1] - cr[1])
-                gate = (rb[2] - rb[0]) * max_shift
-                if d <= gate:
+                if d <= (rb[2] - rb[0]) * max_shift:
                     pairs.append((d, ni, ri))
         pairs.sort()                       # gần nhất trước
         used_n, used_r, out = set(), set(), {}
@@ -1335,20 +1688,34 @@ class MainWindow(QMainWindow):
         return out
 
     def batch_all(self):
-        """Lấy id + chỉnh khung của folder HIỆN TẠI làm mẫu, áp cho TẤT CẢ folder đã chọn."""
+        """Xuất TẤT CẢ folder: mỗi folder dùng KHUNG CẮT của chính nó, ID luôn gán theo MẪU
+        (KHÔNG dùng id riêng của folder).
+          - Folder ĐÃ CHỈNH → giữ khung đã chỉnh của nó; id remap theo mẫu (khớp tâm crop box).
+          - Folder CHƯA chỉnh → phát hiện CỦA CHÍNH NÓ + crop_region/delta riêng; id theo mẫu (khớp tâm
+            khung người). Khung VẼ TAY của mẫu (camera cố định) áp cố định cho folder chưa chỉnh."""
         if not self.queue:
             QMessageBox.warning(self, "Chưa có nhiều folder",
                 "Hãy dùng '📁 Chọn nhiều folder...' trước, rồi gán id cho 1 folder làm mẫu."); return
         if not self.first_boxes:
             return
-        ref_ids = {}                       # ref_idx (0-based) -> id
-        for i, edit in enumerate(self.id_inputs):
-            v = edit.currentText().strip()
-            if v:
-                ref_ids[i] = v
-        if not ref_ids:
+        # Mẫu: khung phát hiện (để khớp tâm + delta) và khung vẽ tay (cắt cố định).
+        ref_boxes, _ref_kpts, ref_map, ref_dlt, manual_crops = self._collect_export_plan()
+        ref_ids = {k - 1: v for k, v in ref_map.items()}      # det_idx (0-based) -> id
+        ref_deltas = {k - 1: v for k, v in ref_dlt.items()}   # det_idx (0-based) -> delta
+        if not ref_ids and not manual_crops:
             QMessageBox.warning(self, "Chưa gán id",
                 "Hãy gán id cho folder hiện tại để làm MẪU áp cho tất cả."); return
+        # lưu chỉnh sửa folder hiện tại vào cache trước, để vòng lặp đọc đúng khung mới nhất của nó
+        self._save_current_state()
+        ref_boxes = [list(b) for b in ref_boxes]
+        # KHUNG CẮT của mẫu (đã chỉnh) + id, để gán lại id theo MẪU cho folder đã chỉnh (khớp tâm crop).
+        edited = self.view.get_boxes()
+        ref_crop_boxes, ref_crop_ids = [], []
+        for i in range(len(self.first_boxes)):
+            val = self.id_inputs[i].currentText().strip() if i < len(self.id_inputs) else ""
+            if val:
+                ref_crop_boxes.append([int(v) for v in edited[i]])
+                ref_crop_ids.append(val)
 
         # Chọn CỤ THỂ folder áp theo số thứ tự (vd: 1-8  hoặc  8,9  hoặc  1,3,5-7)
         cur_no = self.qi + 1
@@ -1356,7 +1723,7 @@ class MainWindow(QMainWindow):
             self, "Áp cho folder nào",
             f"Nhập số thứ tự folder cần áp (1–{len(self.queue)}).\n"
             f"VD: 1-8  hoặc  8,9  hoặc  1,3,5-7. Để trống = tất cả.\n"
-            f"(Mẫu lấy từ folder hiện tại #{cur_no})",
+            f"(Mỗi folder dùng KHUNG của chính nó; ID luôn gán theo MẪU #{cur_no}, không dùng id riêng.)",
             text=f"1-{len(self.queue)}")
         if not ok:
             return
@@ -1364,8 +1731,6 @@ class MainWindow(QMainWindow):
         if not targets:
             QMessageBox.warning(self, "Lỗi", "Phạm vi không hợp lệ."); return
 
-        ref_boxes = [list(b) for b in self.first_boxes]
-        ref_deltas = self._current_deltas()        # key seed id = ref_idx + 1
         self.btn_export.setEnabled(False); self.btn_batch.setEnabled(False)
         self.progress.setMaximum(len(targets)); self.progress.setValue(0)
 
@@ -1375,8 +1740,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"[{step + 1}/{len(targets)}] #{k + 1} {os.path.basename(folder)}...")
             QApplication.processEvents()
             frames = list_frames(folder)
-            if frames:
+            if not frames:
+                self.progress.setValue(step + 1); self._refresh_queue_marks(); continue
+            rec = self._cache.get(folder) or self._saved_edits.get(folder)
+            own_boxes = self._boxes_from_record(rec) if rec else []
+            if own_boxes and ref_crop_boxes:
+                # folder ĐÃ CHỈNH -> dùng KHUNG của chính nó, nhưng ID gán LẠI theo MẪU (khớp tâm crop
+                # box với mẫu), KHÔNG dùng id riêng của folder. Cắt cố định (nhanh, không YOLO).
+                m = self._match_boxes(own_boxes, ref_crop_boxes)   # own_idx -> ref_crop_idx
+                fixed = {}
+                for ni, ri in m.items():
+                    fixed[ref_crop_ids[ri]] = tuple(own_boxes[ni])
+                counts = self._export_folder(folder, frames, [], [], {}, {}, manual_crops=fixed) if fixed else {}
+            else:
+                # folder CHƯA chỉnh -> phát hiện CỦA CHÍNH NÓ, gán id theo mẫu, crop_region riêng.
                 first = cv2.imread(frames[0])
+                counts = {}
                 if first is not None:
                     nb, nk = detect(first)
                     order = order_boxes(nb, nk)
@@ -1386,12 +1765,13 @@ class MainWindow(QMainWindow):
                     for ni, ri in match.items():
                         if ri in ref_ids:
                             mapping[ni + 1] = ref_ids[ri]
-                            deltas[ni + 1] = ref_deltas.get(ri + 1, (0, 0, 0, 0))
-                    if mapping:
-                        counts = self._export_folder(folder, frames, nb, nk, mapping, deltas)
-                        for idv, c in counts.items():
-                            grand[idv] = grand.get(idv, 0) + c
-                        self.done.add(k)
+                            deltas[ni + 1] = ref_deltas.get(ri, (0, 0, 0, 0))
+                    if mapping or manual_crops:
+                        counts = self._export_folder(folder, frames, nb, nk, mapping, deltas, manual_crops)
+            for idv, c in counts.items():
+                grand[idv] = grand.get(idv, 0) + c
+            if counts:
+                self.done.add(k)
             self.progress.setValue(step + 1)
             self._refresh_queue_marks()
             QApplication.processEvents()
@@ -1399,7 +1779,8 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(True); self.btn_batch.setEnabled(True)
         summary = "\n".join(f"  id_{k}: {v} ảnh" for k, v in sorted(grand.items()))
         QMessageBox.information(self, "Hoàn tất",
-            f"Đã áp id mẫu cho {len(targets)} folder.\n\nTổng ảnh mỗi id:\n{summary}")
+            f"Đã xuất {len(targets)} folder (mỗi folder dùng KHUNG của chính nó; ID theo MẪU).\n\n"
+            f"Tổng ảnh mỗi id:\n{summary}")
         self.statusBar().showMessage(
             f"Hoàn tất {len(targets)} folder — tổng {sum(grand.values())} ảnh.")
 
