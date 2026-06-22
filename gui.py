@@ -48,6 +48,32 @@ class FrameEditor(QWidget):
         self._panning = False
         self._pan_last = None
         self._nav = False         # chế độ di chuyển/zoom (tắt = ảnh cố định, rê khung)
+        self._draw_mode = False   # chế độ VẼ khung mới (model bỏ sót -> tự khoanh tay)
+        self._draw_start = None   # điểm bắt đầu vẽ (toạ độ ảnh gốc)
+        self._draw_cur = None     # điểm hiện tại khi đang kéo
+        self.on_new_box = None    # callback(box) khi vẽ xong 1 khung mới
+
+    def has_image(self):
+        return self._img is not None
+
+    def set_draw_mode(self, on):
+        """Bật chế độ VẼ: kéo chuột trên ảnh để tạo 1 khung thủ công (1 lần, xong tự tắt)."""
+        self._draw_mode = bool(on)
+        self._draw_start = self._draw_cur = None
+        if on:
+            self.set_nav(False)               # tắt di chuyển để vẽ được
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def add_box(self, box, label):
+        """Thêm 1 khung mới (vẽ tay) vào danh sách hiển thị, chọn luôn khung đó."""
+        self.boxes.append([int(v) for v in box])
+        self.labels.append(str(label))
+        self.selected = len(self.boxes) - 1
+        self.update()
+        return self.selected
 
     def set_nav(self, on):
         """Bật/tắt chế độ di chuyển: bật mới được zoom+kéo ảnh; tắt thì cố định để chỉnh khung."""
@@ -158,6 +184,11 @@ class FrameEditor(QWidget):
             lbl = str(self.labels[i]) if i < len(self.labels) else str(i + 1)
             qp.setPen(QColor(255, 210, 0) if sel else QColor(255, 90, 90))
             qp.drawText(r.left() + 4, r.top() + 17, lbl)
+        # khung đang VẼ (kéo chuột) -> viền xanh nét đứt
+        if self._draw_mode and self._draw_start is not None and self._draw_cur is not None:
+            r = QRect(self._to_wid(*self._draw_start), self._to_wid(*self._draw_cur)).normalized()
+            qp.setPen(QPen(QColor(0, 200, 255), 2, Qt.DashLine)); qp.setBrush(Qt.NoBrush)
+            qp.drawRect(r)
         qp.end()
 
     # --- xác định cạnh/góc dưới con trỏ ---
@@ -203,6 +234,12 @@ class FrameEditor(QWidget):
     def mousePressEvent(self, e):
         if self._img is None:
             return
+        # CHẾ ĐỘ VẼ: bắt đầu khoanh 1 khung mới (chỉ chuột trái)
+        if self._draw_mode:
+            if e.button() == Qt.LeftButton:
+                self._draw_start = self._draw_cur = self._to_img(e.pos())
+                self.update()
+            return
         # CHẾ ĐỘ DI CHUYỂN: mọi kéo = di chuyển ảnh (không đụng khung)
         if self._nav or e.button() == Qt.MiddleButton:
             if e.button() in (Qt.LeftButton, Qt.MiddleButton):
@@ -231,6 +268,11 @@ class FrameEditor(QWidget):
 
     def mouseMoveEvent(self, e):
         if self._img is None:
+            return
+        if self._draw_mode:
+            if self._draw_start is not None:
+                self._draw_cur = self._to_img(e.pos())
+                self.update()
             return
         if self._panning:
             d = e.pos() - self._pan_last
@@ -266,6 +308,19 @@ class FrameEditor(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, e):
+        # CHẾ ĐỘ VẼ: kết thúc kéo -> tạo khung (nếu đủ to) rồi tự tắt chế độ vẽ
+        if self._draw_mode:
+            if self._img is not None and self._draw_start is not None and self._draw_cur is not None:
+                (x1, y1), (x2, y2) = self._draw_start, self._draw_cur
+                W, H = self._img.width(), self._img.height()
+                box = [max(0, min(int(min(x1, x2)), W)), max(0, min(int(min(y1, y2)), H)),
+                       max(0, min(int(max(x1, x2)), W)), max(0, min(int(max(y1, y2)), H))]
+                self._draw_start = self._draw_cur = None
+                if (box[2] - box[0] >= self.MIN_SIZE and box[3] - box[1] >= self.MIN_SIZE
+                        and self.on_new_box):
+                    self.on_new_box(box)        # báo MainWindow thêm khung + ô id
+            self.set_draw_mode(False)
+            return
         self._drag = None
         if self._panning:
             self._panning = False
@@ -392,9 +447,17 @@ class MainWindow(QMainWindow):
                      "để lăn chuột ZOOM + kéo DI CHUYỂN; bấm lại để khoá, chỉnh khung tiếp.")
         tip.setStyleSheet("color:#888; font-weight:normal;"); tip.setWordWrap(True)
         ll.addWidget(tip)
+        box_row = QHBoxLayout()
+        self.btn_add_box = QPushButton("➕ Thêm đối tượng (vẽ tay)")
+        self.btn_add_box.setStyleSheet("background:#8a5a00;")
+        self.btn_add_box.setToolTip("Khi model bỏ sót người: bấm nút này rồi KÉO chuột "
+                                    "trên ảnh để khoanh 1 khung quanh đối tượng.")
+        self.btn_add_box.clicked.connect(self._start_add_box)
+        box_row.addWidget(self.btn_add_box)
         self.btn_reset_box = QPushButton("↺ Khôi phục khung tự động")
         self.btn_reset_box.clicked.connect(self.reset_boxes)
-        ll.addWidget(self.btn_reset_box)
+        box_row.addWidget(self.btn_reset_box)
+        ll.addLayout(box_row)
         left.setLayout(ll); left.setMinimumWidth(360)
         main.addWidget(left)
 
@@ -405,6 +468,20 @@ class MainWindow(QMainWindow):
         hint = QLabel("Gõ id cho từng khung. Để TRỐNG = bỏ qua\n(người mới vào / không thuộc quy tắc).")
         hint.setStyleSheet("color:#aaa; font-weight:normal;"); hint.setWordWrap(True)
         rl.addWidget(hint)
+        clr_row = QHBoxLayout()
+        self.btn_clear_suggest = QPushButton("🧹 Xoá hết id")
+        self.btn_clear_suggest.setStyleSheet("background:#555;")
+        self.btn_clear_suggest.setToolTip("Xoá HẾT id của mọi khung (cả id gợi ý lẫn id đã gõ tay) "
+                                          "để gán lại từ đầu cho dễ.")
+        self.btn_clear_suggest.clicked.connect(self._clear_suggestions)
+        clr_row.addWidget(self.btn_clear_suggest)
+        self.btn_restore_suggest = QPushButton("↩ Khôi phục id gợi ý")
+        self.btn_restore_suggest.setStyleSheet("background:#555;")
+        self.btn_restore_suggest.setToolTip("Điền lại id theo GỢI Ý (so khớp ngoại hình với bộ nhớ id). "
+                                            "Ghi đè cả ô đã xoá / đã sửa tay.")
+        self.btn_restore_suggest.clicked.connect(self._restore_suggestions)
+        clr_row.addWidget(self.btn_restore_suggest)
+        rl.addLayout(clr_row)
         self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True)
         self.scroll_inner = QWidget(); self.form = QVBoxLayout(self.scroll_inner)
         self.form.setAlignment(Qt.AlignTop)
@@ -693,9 +770,19 @@ class MainWindow(QMainWindow):
                 "ids": ids,
                 "colors": list(self._suggest_colors),   # giữ màu gợi ý khi quay lại folder
             }
-            # bản nhẹ để lưu ra đĩa (chỉ giữ id + khung; phát hiện sẽ chạy lại khi mở)
-            if any(s.strip() for s in ids):
-                self._saved_edits[self._current_folder] = {"ids": ids, "boxes": boxes}
+            # bản nhẹ để lưu ra đĩa (id + khung cắt + bbox khung VẼ TAY để khôi phục lại).
+            # Khung vẽ tay không tự phát hiện được -> phải lưu bbox của chúng (kpts is None).
+            manual = [list(self.first_boxes[i]) for i in range(len(self.first_boxes))
+                      if self.first_kpts[i] is None]
+            if any(s.strip() for s in ids) or manual:
+                rec = {"ids": ids, "boxes": boxes}
+                if manual:
+                    rec["manual"] = manual
+                self._saved_edits[self._current_folder] = rec
+                self._refresh_history()
+            elif self._current_folder in self._saved_edits:
+                # không còn id/khung tay -> bỏ bản lưu cũ (tránh khung tay đã xoá hiện lại)
+                del self._saved_edits[self._current_folder]
                 self._refresh_history()
             self._save_state_to_disk()
 
@@ -738,10 +825,16 @@ class MainWindow(QMainWindow):
             h0, w0 = first.shape[:2]
             self.auto_crops = [list(crop_region(self.first_boxes[i], self.first_kpts[i], w0, h0))
                                for i in range(len(self.first_boxes))]
+            # Khôi phục các khung VẼ TAY đã lưu (model không tự phát hiện được) -> nối vào cuối,
+            # kpts=None như lúc tạo, để chạy chung pipeline (delta + tracker giữ khung).
+            disk = self._saved_edits.get(folder)
+            for mb in (disk.get("manual", []) if disk else []):
+                self.first_boxes.append([int(v) for v in mb])
+                self.first_kpts.append(None)
+                self.auto_crops.append(list(crop_region(mb, None, w0, h0)))
             saved_boxes = [list(b) for b in self.auto_crops]
             saved_ids = ["" for _ in self.first_boxes]
-            # áp chỉnh sửa đã LƯU RA ĐĨA từ phiên trước (nếu có, khớp số khung)
-            disk = self._saved_edits.get(folder)
+            # áp chỉnh sửa đã LƯU RA ĐĨA từ phiên trước (nếu có, khớp số khung gồm cả khung tay)
             if disk:
                 db = disk.get("boxes", []); di = disk.get("ids", [])
                 if len(db) == len(self.first_boxes):
@@ -786,25 +879,39 @@ class MainWindow(QMainWindow):
 
         self._clear_form()
         for i in range(len(self.first_boxes)):
-            row = QHBoxLayout()
-            btn = QPushButton(f"Khung #{i + 1}"); btn.setCheckable(True); btn.setFixedWidth(95)
-            btn.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
-                              "QPushButton:checked{background:#c8a000;color:#000;}")
-            btn.clicked.connect(lambda _=False, k=i: self._select_box(k))
-            self.id_buttons.append(btn); row.addWidget(btn)
-            row.addWidget(QLabel("→ id_"))
-            edit = self._make_id_combo()
-            edit.setCurrentText(saved_ids[i] if i < len(saved_ids) else "")
-            if self._suggest_colors[i]:
-                edit.setStyleSheet(self._suggest_style(self._suggest_colors[i]))
-                # khi người dùng tự sửa -> bỏ tô màu gợi ý (UI + cache) về mặc định
-                edit.editTextChanged.connect(
-                    lambda _t, e=edit, k=i: (e.setStyleSheet(""),
-                                             self._suggest_colors.__setitem__(k, None)))
-            self.id_inputs.append(edit); row.addWidget(edit); row.addStretch()
-            w = QWidget(); w.setLayout(row); self.form.addWidget(w)
+            self._add_id_row(i, saved_ids[i] if i < len(saved_ids) else "",
+                             self._suggest_colors[i],
+                             deletable=self.first_kpts[i] is None)   # None = khung vẽ tay
         if self.id_buttons:
             self._highlight_row(0)
+
+    def _add_id_row(self, i, value="", color=None, deletable=False):
+        """Dựng 1 hàng gán id (nút chọn khung + ô id) cho khung thứ i, gắn vào form.
+        deletable=True (khung VẼ TAY) -> thêm nút ✕ để xoá riêng khung đó."""
+        row = QHBoxLayout()
+        btn = QPushButton(f"Khung #{i + 1}"); btn.setCheckable(True); btn.setFixedWidth(95)
+        btn.setStyleSheet("QPushButton{background:#3a3a3a;padding:5px;}"
+                          "QPushButton:checked{background:#c8a000;color:#000;}")
+        btn.clicked.connect(lambda _=False, k=i: self._select_box(k))
+        self.id_buttons.append(btn); row.addWidget(btn)
+        row.addWidget(QLabel("→ id_"))
+        edit = self._make_id_combo()
+        edit.setCurrentText(value)
+        if color:
+            edit.setStyleSheet(self._suggest_style(color))
+        # khi người dùng tự sửa -> bỏ tô màu gợi ý (UI + cache) về mặc định.
+        # Gắn KHÔNG điều kiện để màu khôi phục sau này (nút ↩) cũng tự mất khi sửa tay.
+        edit.editTextChanged.connect(lambda _t, e=edit, k=i: self._on_id_edited(k, e))
+        self.id_inputs.append(edit); row.addWidget(edit)
+        if deletable:                                  # khung vẽ tay -> cho xoá nếu kéo nhầm
+            dele = QPushButton("✕"); dele.setFixedWidth(28)
+            dele.setToolTip("Xoá khung vẽ tay này (nhỡ kéo nhầm)")
+            dele.setStyleSheet("QPushButton{background:#a33;padding:5px;}"
+                               "QPushButton:hover{background:#c44;}")
+            dele.clicked.connect(lambda _=False, k=i: self._delete_box(k))
+            row.addWidget(dele)
+        row.addStretch()
+        w = QWidget(); w.setLayout(row); self.form.addWidget(w)
 
     def _suggest_ids(self, first_img, saved_boxes):
         """Gợi ý id theo ngoại hình, khớp 1-1 (mỗi id chỉ gán 1 người). Trả về (ids, màu)."""
@@ -830,11 +937,130 @@ class MainWindow(QMainWindow):
             colors[i] = "#28a745" if s >= 0.62 else "#d0a000"   # xanh chắc / vàng ngờ
         return ids, colors
 
+    def _on_id_edited(self, k, edit):
+        """Người dùng sửa tay 1 ô id -> bỏ màu gợi ý của ô đó (UI + cache)."""
+        if k < len(self._suggest_colors) and self._suggest_colors[k]:
+            edit.setStyleSheet("")
+            self._suggest_colors[k] = None
+
+    def _restore_suggestions(self):
+        """Khôi phục id theo GỢI Ý: chạy lại so khớp ngoại hình trên frame đầu, điền id + tô màu.
+        Ghi đè mọi ô (cả ô đã xoá / đã sửa tay) bằng kết quả gợi ý mới nhất."""
+        if not self._gallery:
+            QMessageBox.information(self, "Chưa có bộ nhớ id",
+                "Chưa có bộ nhớ id để gợi ý. Hãy tạo bằng '🧠 Bộ nhớ id' trước."); return
+        if not self.frames or not self.id_inputs:
+            return
+        first = cv2.imread(self.frames[0])
+        if first is None:
+            QMessageBox.warning(self, "Lỗi", "Không đọc được frame đầu."); return
+        boxes = self.view.get_boxes()
+        ids, colors = self._suggest_ids(first, boxes)
+        restored = 0
+        for i, edit in enumerate(self.id_inputs):
+            col = colors[i] if i < len(colors) else None
+            val = ids[i] if i < len(ids) else ""
+            edit.blockSignals(True)                  # tự điền -> không kích _on_id_edited
+            edit.setCurrentText(val)
+            edit.setStyleSheet(self._suggest_style(col) if col else "")
+            edit.blockSignals(False)
+            if i < len(self._suggest_colors):
+                self._suggest_colors[i] = col
+            if val:
+                restored += 1
+        self._save_current_state()
+        self.statusBar().showMessage(
+            f"Đã khôi phục {restored} id gợi ý (xanh = chắc, vàng = nên kiểm)." if restored
+            else "Không có id nào được gợi ý (ngoại hình không khớp bộ nhớ).")
+
+    def _clear_suggestions(self):
+        """Xoá HẾT id của mọi khung (cả id gợi ý lẫn id đã gõ tay) để gán lại từ đầu."""
+        cleared = 0
+        for i, edit in enumerate(self.id_inputs):
+            if edit.currentText().strip():
+                cleared += 1
+            edit.blockSignals(True)                  # tránh kích editTextChanged khi tự xoá
+            edit.setCurrentText("")
+            edit.setStyleSheet("")
+            edit.blockSignals(False)
+            if i < len(self._suggest_colors):
+                self._suggest_colors[i] = None
+        self._save_current_state()                   # cập nhật cache + đĩa
+        self.statusBar().showMessage(
+            f"Đã xoá {cleared} id — gán lại từ đầu cho dễ." if cleared
+            else "Không có id nào để xoá.")
+
     def reset_boxes(self):
         """Khôi phục các khung cắt về tự động (bỏ chỉnh tay)."""
         if self.auto_crops:
             labels = [str(i + 1) for i in range(len(self.auto_crops))]
             self.view.set_boxes([list(b) for b in self.auto_crops], labels)
+
+    def _start_add_box(self):
+        """Bật chế độ vẽ tay 1 khung cho đối tượng model bỏ sót."""
+        if not self.view.has_image():
+            QMessageBox.information(self, "Chưa có ảnh",
+                "Hãy 'Tải & phát hiện' một folder trước khi thêm khung."); return
+        self.btn_nav.setChecked(False)               # tắt chế độ di chuyển nếu đang bật
+        self.view.on_new_box = self._on_new_box
+        self.view.set_draw_mode(True)
+        self.statusBar().showMessage("✏️ Vẽ khung: KÉO chuột trên ảnh để khoanh đối tượng "
+                                     "còn thiếu (bấm 1 phát không kéo = huỷ).")
+
+    def _on_new_box(self, box):
+        """Thêm 1 khung VẼ TAY (không có keypoint) vào danh sách, kèm 1 ô gán id mới.
+        Khung này chạy chung pipeline: IoUTracker bám qua mọi frame, delta giữ đúng vùng cắt."""
+        if not self.view.has_image():
+            return
+        w, h = self.view._img.width(), self.view._img.height()
+        # bbox người = vùng vẽ; auto_crop = crop_region(None kpts) để delta khớp khi xuất
+        self.first_boxes.append([int(v) for v in box])
+        self.first_kpts.append(None)
+        self.auto_crops.append(list(crop_region(box, None, w, h)))
+        i = len(self.first_boxes) - 1
+        self._suggest_colors.append(None)
+        self.view.add_box(box, i + 1)                # hiển thị + chọn khung mới
+        self._add_id_row(i, "", None, deletable=True)   # ô gán id + nút ✕ (xoá nếu kéo nhầm)
+        self._select_box(i)
+        # cuộn xuống để thấy ô id mới, bật nút xuất, lưu trạng thái
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(
+            self.scroll.verticalScrollBar().maximum()))
+        self.btn_export.setEnabled(True)
+        self._save_current_state()
+        self.statusBar().showMessage(f"Đã thêm khung #{i + 1}. Gõ id cho khung này rồi xuất.")
+
+    def _delete_box(self, i):
+        """Xoá khung thứ i (chỉ dùng cho khung VẼ TAY) khỏi mọi danh sách + dựng lại form."""
+        if not (0 <= i < len(self.first_boxes)):
+            return
+        # gom id + khung hiện tại từ UI trước khi xoá để giữ nguyên các khung còn lại
+        ids = [e.currentText() for e in self.id_inputs]
+        boxes = self.view.get_boxes()
+        colors = list(self._suggest_colors)
+        for lst in (self.first_boxes, self.first_kpts, self.auto_crops, ids, boxes, colors):
+            if i < len(lst):
+                del lst[i]
+        self._rebuild_id_rows(boxes, ids, colors)
+        if not self.first_boxes:
+            self.btn_export.setEnabled(False)
+        self._save_current_state()
+        self.statusBar().showMessage(f"Đã xoá khung #{i + 1}.")
+
+    def _rebuild_id_rows(self, boxes, ids, colors):
+        """Cập nhật khung hiển thị + dựng lại toàn bộ hàng id (đánh số lại) sau khi thêm/xoá.
+        KHÔNG đụng ảnh nền / zoom hiện tại."""
+        n = len(self.first_boxes)
+        self.view.boxes = [[int(v) for v in b] for b in boxes]
+        self.view.labels = [str(k + 1) for k in range(n)]
+        self.view.selected = 0 if self.view.boxes else None
+        self.view.update()
+        self._suggest_colors = (list(colors) + [None] * n)[:n]
+        self._clear_form()
+        for k in range(n):
+            self._add_id_row(k, ids[k] if k < len(ids) else "", self._suggest_colors[k],
+                             deletable=self.first_kpts[k] is None)
+        if self.id_buttons:
+            self._highlight_row(0)
 
     # ---- Bộ nhớ id (gallery theo ngoại hình) ----
     def build_gallery(self):
