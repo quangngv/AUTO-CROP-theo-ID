@@ -19,6 +19,7 @@
   - [Bước 4: Tải model YOLO](#bước-4-tải-model-yolo)
 - [Chạy ứng dụng](#-chạy-ứng-dụng)
 - [Hướng dẫn sử dụng](#-hướng-dẫn-sử-dụng)
+- [Phím tắt](#-phím-tắt)
 - [Bộ nhớ ID — Gợi ý tự động](#-bộ-nhớ-id--gợi-ý-tự-động)
 - [Cấu trúc thư mục](#-cấu-trúc-thư-mục)
 - [Cấu hình nâng cao](#-cấu-hình-nâng-cao)
@@ -180,7 +181,7 @@ python main.py
 
 ### Chế độ xem frame khác
 
-Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị trí khác nhau trong clip (giữ nguyên khung cắt để so sánh).
+Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị trí khác nhau trong clip (giữ nguyên khung cắt để so sánh). Hoặc dùng phím `A` / `D` (xem mục [Phím tắt](#-phím-tắt)).
 
 ### Kết quả đầu ra
 
@@ -195,6 +196,24 @@ Dùng các nút `📍 Đầu / Giữa / Cuối` để xem frame ở các vị tr
 │   └── ...
 └── (các frame gốc)
 ```
+
+---
+
+## ⌨️ Phím tắt
+
+Thao tác nhanh không cần chuột (phím thuần, **không** cần giữ Ctrl):
+
+| Phím | Chức năng |
+|------|-----------|
+| `W` | Folder **trước** (lên) — đổi folder đang làm trong hàng đợi |
+| `S` | Folder **kế** (xuống) — đổi folder đang làm trong hàng đợi |
+| `Q` | Chuyển sang tab **✏️ Làm việc** |
+| `E` | Chuyển sang tab **🖼 Ảnh đã cắt** |
+| `A` | Khung xem **lùi** (Cuối → Giữa → Đầu) |
+| `D` | Khung xem **tới** (Đầu → Giữa → Cuối) — tuần tự, quay vòng |
+
+> - `W`/`S` ở tab **🖼 Ảnh đã cắt** sẽ đổi folder đang xem trong cây bên trái (cùng kiểu thao tác).
+> - Khi con trỏ đang ở trong ô nhập ID hoặc ô đường dẫn, các phím này **gõ chữ như thường** — chỉ điều hướng khi nhấp ra ngoài ô nhập.
 
 ---
 

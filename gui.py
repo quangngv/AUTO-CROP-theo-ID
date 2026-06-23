@@ -447,6 +447,17 @@ class MainWindow(QMainWindow):
         path_row.addWidget(btn_gal)
         self.btn_load = QPushButton("🔍 Tải & phát hiện"); self.btn_load.clicked.connect(self.load_and_detect)
         path_row.addWidget(self.btn_load)
+        # Nút điều hướng folder trước/kế (đỡ phải bấm chuột vào cột bên trái) — Ctrl+↑/↓
+        self.btn_prev_folder = QPushButton("⬆")
+        self.btn_prev_folder.setFixedWidth(36)
+        self.btn_prev_folder.setToolTip("Folder TRƯỚC trong hàng đợi (phím W)")
+        self.btn_prev_folder.clicked.connect(lambda: self._nav_queue(-1))
+        path_row.addWidget(self.btn_prev_folder)
+        self.btn_next_folder = QPushButton("⬇")
+        self.btn_next_folder.setFixedWidth(36)
+        self.btn_next_folder.setToolTip("Folder KẾ trong hàng đợi (phím S)")
+        self.btn_next_folder.clicked.connect(lambda: self._nav_queue(1))
+        path_row.addWidget(self.btn_next_folder)
         root.addLayout(path_row)
 
         # Cột thumbnail các folder đã chọn (bên phải; bấm để mở; ✓ = đã xong)
@@ -584,6 +595,20 @@ class MainWindow(QMainWindow):
         self._build_history_tab()
         self._build_results_tab()
         self.tabs.currentChanged.connect(self._on_tab_changed)
+
+        # ===== PHÍM TẮT (WASD, phím thuần không cần Ctrl) =====
+        # W = lên (folder trước), S = xuống (folder kế). Ở tab Làm việc đổi folder hàng đợi;
+        # ở tab Ảnh đã cắt đổi folder đang xem trong cây — cùng kiểu thao tác.
+        QShortcut(QKeySequence(Qt.Key_W), self, activated=lambda: self._nav_folder(-1))
+        QShortcut(QKeySequence(Qt.Key_S), self, activated=lambda: self._nav_folder(1))
+        # Q = sang tab Làm việc, E = sang tab Ảnh đã cắt.
+        QShortcut(QKeySequence(Qt.Key_Q), self, activated=lambda: self.tabs.setCurrentIndex(0))
+        QShortcut(QKeySequence(Qt.Key_E), self,
+                  activated=lambda: self.tabs.setCurrentIndex(self._results_tab_index))
+        # A = lùi, D = tới: đổi khung xem Đầu → Giữa → Cuối tuần tự.
+        QShortcut(QKeySequence(Qt.Key_A), self, activated=lambda: self._nav_frame_pos(-1))
+        QShortcut(QKeySequence(Qt.Key_D), self, activated=lambda: self._nav_frame_pos(1))
+
         self.statusBar().showMessage("Sẵn sàng — chọn thư mục chứa frame")
 
         # Trạng thái
@@ -765,6 +790,42 @@ class MainWindow(QMainWindow):
     def _on_queue_clicked(self, item):
         self.qi = self.queue_list.row(item)
         self._load_queue_current()
+
+    def _nav_queue(self, delta):
+        """Chuyển sang folder TRƯỚC/KẾ trong hàng đợi (nút ⬆/⬇ hoặc Ctrl+↑/↓).
+        Quay vòng (folder cuối -> đầu) cho thao tác liên tục; bỏ qua nếu chỉ 1 folder."""
+        n = len(self.queue)
+        if n <= 1:
+            return
+        self.qi = (self.qi + delta) % n
+        self._load_queue_current()   # tự lưu chỉnh sửa folder cũ + nạp folder mới
+
+    def _nav_folder(self, delta):
+        """Phím W (-1) / S (+1): chuyển folder theo TAB đang mở.
+        Tab Ảnh đã cắt → đổi folder đang xem trong cây; còn lại → đổi folder hàng đợi."""
+        if self.tabs.currentIndex() == self._results_tab_index:
+            self._nav_res_tree(delta)
+        else:
+            self._nav_queue(delta)
+
+    def _nav_frame_pos(self, delta):
+        """Phím A (-1) / D (+1): đổi khung xem ĐẦU → GIỮA → CUỐI tuần tự (quay vòng)."""
+        if not self.frames:
+            return
+        order = ["first", "mid", "last"]
+        cur = self._frame_pos if self._frame_pos in order else "first"
+        nxt = order[(order.index(cur) + delta) % len(order)]
+        self._show_frame_pos(nxt)
+
+    def _nav_res_tree(self, delta):
+        """Chuyển node folder kế/trước trong cây tab Ảnh đã cắt (quay vòng)."""
+        n = self.res_tree.topLevelItemCount()
+        if n <= 1:
+            return
+        cur = self.res_tree.currentItem()
+        idx = next((i for i in range(n) if self.res_tree.topLevelItem(i) is cur), -1)
+        idx = (idx + delta) % n   # chưa chọn (-1): X→0 (folder đầu), Z→folder cuối
+        self.res_tree.setCurrentItem(self.res_tree.topLevelItem(idx))
 
     def _queue_menu(self, pos):
         """Menu chuột phải trên dải folder: bỏ folder này / bỏ tất cả."""
