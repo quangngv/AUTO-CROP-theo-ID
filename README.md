@@ -45,10 +45,14 @@
 | Thành phần | Yêu cầu tối thiểu | Khuyên dùng |
 |------------|-------------------|-------------|
 | **OS** | Windows 10 / Linux / macOS | Windows 10/11 |
-| **Python** | 3.8+ | 3.10 – 3.11 |
+| **Python** | 3.8 – 3.12 | 3.10 – 3.11 |
 | **RAM** | 4GB | 8GB+ |
 | **GPU** | Không bắt buộc | NVIDIA GPU có CUDA (nhanh hơn 5-10x) |
 | **Ổ cứng** | ~1GB (model + thư viện) | SSD |
+
+> ⚠️ **KHÔNG dùng Python 3.13 / 3.14** (quá mới): PyTorch chưa có bản cài (wheel) ổn định cho các
+> phiên bản này → khi chạy sẽ lỗi `WinError 1114 ... c10.dll`. Hãy cài **Python 3.10–3.12**
+> (xem mục **"Xử lý lỗi thường gặp → #5"** ở cuối README).
 
 ---
 
@@ -57,7 +61,8 @@
 ### Bước 1: Cài Python
 
 1. Tải Python từ [python.org](https://www.python.org/downloads/)
-   - Khuyên dùng **Python 3.10** hoặc **3.11**
+   - Khuyên dùng **Python 3.10** hoặc **3.11** (chấp nhận tới **3.12**)
+   - ⚠️ **TRÁNH Python 3.13 / 3.14** — PyTorch chưa hỗ trợ, sẽ lỗi `c10.dll` (xem mục lỗi #5)
 2. Khi cài, **TICK vào ô "Add Python to PATH"** (rất quan trọng!)
 3. Kiểm tra sau khi cài:
 
@@ -296,6 +301,54 @@ pip uninstall PyQt5 PyQt5-sip PyQt5-Qt5 && pip install PyQt5
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
+
+### 5. `WinError 1114 ... c10.dll` — lỗi nạp thư viện PyTorch
+> Thông báo đầy đủ:
+> `[WinError 1114] A dynamic link library (DLL) initialization routine failed.`
+> `Error loading "...\torch\lib\c10.dll" or one of its dependencies.`
+
+Đây là **lỗi môi trường** (không phải lỗi của app): Windows không nạp được DLL của PyTorch.
+Thường gặp khi cài trên **máy mới**. Nguyên nhân & cách sửa theo thứ tự:
+
+**a) Python quá mới (hay gặp nhất — vd đường dẫn lỗi có `Python314` = Python 3.14)**
+PyTorch chưa hỗ trợ Python 3.13/3.14. Kiểm tra:
+```bash
+python --version
+```
+Nếu là **3.13 / 3.14** → gỡ cài, tải **Python 3.10–3.12** ở [python.org](https://www.python.org/downloads/),
+rồi tạo lại môi trường ảo và cài lại thư viện:
+```bash
+# (sau khi đã cài Python 3.10–3.12)
+py -3.11 -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**b) Thiếu Microsoft Visual C++ Redistributable**
+`c10.dll` cần bộ thư viện chạy VC++. Tải **"Visual C++ Redistributable for Visual Studio (x64)"**
+mới nhất của Microsoft → cài `vc_redist.x64.exe` → khởi động lại máy.
+(Link: https://aka.ms/vs/17/release/vc_redist.x64.exe )
+
+**c) Bản torch cài lẫn lộn theo từng-người (`AppData\Roaming\Python`)**
+Đường dẫn lỗi nằm trong `AppData\Roaming\Python\...` nghĩa là torch được cài bằng `pip install --user`
+(ngoài venv), dễ xung đột. Gỡ sạch rồi cài lại **trong venv**:
+```bash
+pip uninstall torch torchvision        # chạy CẢ trong và ngoài venv để gỡ hết bản --user
+pip install torch torchvision          # bản CPU; hoặc bản CUDA 11.8 ở Bước 3 nếu có GPU NVIDIA
+```
+
+**d) Máy KHÔNG có GPU NVIDIA nhưng lỡ cài bản CUDA**
+Cài bản **CPU-only** cho nhẹ và tránh thiếu DLL CUDA:
+```bash
+pip uninstall torch torchvision
+pip install torch torchvision          # KHÔNG dùng --index-url cu118
+```
+
+> Mẹo kiểm tra nhanh torch đã chạy được chưa:
+> ```bash
+> python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+> ```
+> Chạy được (in ra phiên bản) là môi trường đã ổn; nếu vẫn lỗi `c10.dll` thì làm lại bước (a) → (b).
 
 ---
 
